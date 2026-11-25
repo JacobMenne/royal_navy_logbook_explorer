@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Royal Navy Logbook Explorer</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 820px;
+      margin: 2.5rem auto;
+      padding: 0 1.25rem;
+      color: #1a1a1a;
+      background: #f8f9fa;
+      line-height: 1.5;
+    }
+    h1 { margin-bottom: 0.25rem; font-size: 1.6rem; }
+    .subtitle { color: #555; margin-top: 0; margin-bottom: 1.5rem; font-size: 0.95rem; }
+    .controls {
+      display: flex;
+      gap: 0.75rem;
+      background: #fff;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      align-items: center;
+    }
+    select {
+      flex: 1;
+      padding: 0.55rem;
+      font-size: 0.95rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 0.55rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: 1px solid #222;
+      border-radius: 4px;
+      background: #222;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: #fff; color: #222; }
+    .card {
+      margin-top: 1.5rem;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 1.25rem;
+      display: none;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .score-badge {
+      font-size: 1.25rem;
+      font-weight: 700;
+      padding: 0.3rem 0.75rem;
+      border-radius: 4px;
+      background: #eee;
+    }
+    .score-high { background: #fde8e8; color: #9b1c1c; }
+    .score-med { background: #fef3c7; color: #92400e; }
+    .score-low { background: #e5e7eb; color: #374151; }
+    .meta { color: #555; font-size: 0.9rem; }
+    .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #eee; }
+    .flagged-item {
+      border-left: 3px solid #222;
+      padding-left: 0.75rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.92rem;
+    }
+    .kw {
+      display: inline-block;
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      padding: 0.05rem 0.35rem;
+      font-size: 0.78rem;
+      margin-right: 0.25rem;
+    }
+    #status { margin-top: 0.75rem; font-size: 0.9rem; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Royal Navy Logbook Explorer</h1>
+  <p class="subtitle">Select a vessel to inspect or scan its logbooks (1756–1815).</p>
+
+  <div class="controls">
+    <select id="shipSelect">
+      <option value="">-- Select a Ship --</option>
+    </select>
+    <button id="scanBtn" disabled>Scan Logbooks</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="dossier" class="card">
+    <div class="header-row">
+      <div>
+        <h2 id="shipTitle" style="margin:0;"></h2>
+        <div id="shipMeta" class="meta"></div>
+      </div>
+      <div id="scoreBadge" class="score-badge">Not Scanned</div>
+    </div>
+
+    <h3>Voyage Summary</h3>
+    <p id="shipSummary" style="white-space: pre-line;"></p>
+
+    <h3>Flagged Pages</h3>
+    <div id="flaggedList"></div>
+
+    <div class="actions">
+      <button id="saveBtn" class="secondary" style="display: none;">Save Voyage</button>
+      <button id="deepDiveBtn">Deep Dive (Full Transcription)</button>
+      <button id="mapBtn" class="secondary" disabled title="Coming in Phase 4">Visualize Route</button>
+    </div>
+  </div>
+
+  <script>
+    const shipSelect = document.getElementById("shipSelect");
+    const scanBtn = document.getElementById("scanBtn");
+    const statusEl = document.getElementById("status");
+    const dossier = document.getElementById("dossier");
+    const saveBtn = document.getElementById("saveBtn");
+    const deepDiveBtn = document.getElementById("deepDiveBtn");
+
+    let currentShipId = null;
+
+    async function loadShips() {
+      const res = await fetch("/api/ships");
+      const ships = await res.json();
+      shipSelect.innerHTML = '<option value="">-- Select a Ship --</option>';
+      ships.forEach(s => {
+        const score = s.interest_score ? ` [Score: ${s.interest_score}/10]` : "";
+        const saved = s.is_saved ? " ★" : "";
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = `${s.ship_name} (${s.year_start}–${s.year_end} | ${s.ship_class || "Unknown"})${score}${saved}`;
+        shipSelect.appendChild(opt);
+      });
+    }
+
+    function renderDossier(data) {
+      const { ship, flagged_pages } = data;
+      const isScanned = ship.interest_score !== null;
+
+      dossier.style.display = "block";
+      document.getElementById("shipTitle").textContent = ship.ship_name;
+      document.getElementById("shipMeta").textContent =
+        `${ship.ship_class || "Unknown Class"} • ${ship.year_start}–${ship.year_end} • Source: ${ship.source_type}`;
+
+      const badge = document.getElementById("scoreBadge");
+      badge.className = "score-badge";
+      if (isScanned) {
+        badge.textContent = `${ship.interest_score} / 10`;
+        if (ship.interest_score >= 7) badge.classList.add("score-high");
+        else if (ship.interest_score >= 4) badge.classList.add("score-med");
+        else badge.classList.add("score-low");
+      } else {
+        badge.textContent = "Not Scanned";
+      }
+
+      document.getElementById("shipSummary").textContent =
+        ship.triage_summary || "No logbook scan summary yet.";
+
+      const flaggedList = document.getElementById("flaggedList");
+      if (!flagged_pages.length) {
+        flaggedList.innerHTML = "<p class='meta'>No flagged incidents recorded yet.</p>";
+      } else {
+        flaggedList.innerHTML = flagged_pages.map(p => `
+          <div class="flagged-item">
+            <strong>Page ${p.page_num}</strong> (${p.date_range}) — Score: ${p.page_score}<br/>
+            ${p.remarks_summary}<br/>
+            ${p.flagged_keywords.map(k => `<span class="kw">${k}</span>`).join("")}
+          </div>
+        `).join("");
+      }
+
+      // Only show Save Voyage after the ship has been scanned
+      if (isScanned) {
+        saveBtn.style.display = "inline-block";
+        saveBtn.textContent = ship.is_saved ? "Saved ★" : "Save Voyage";
+        saveBtn.disabled = Boolean(ship.is_saved);
+      } else {
+        saveBtn.style.display = "none";
+      }
+    }
+
+    shipSelect.addEventListener("change", async () => {
+      currentShipId = shipSelect.value;
+      scanBtn.disabled = !currentShipId;
+      statusEl.textContent = "";
+      if (!currentShipId) {
+        dossier.style.display = "none";
+        return;
+      }
+      const res = await fetch(`/api/ships/${currentShipId}`);
+      renderDossier(await res.json());
+    });
+
+    scanBtn.addEventListener("click", async () => {
+      if (!currentShipId) return;
+      scanBtn.disabled = true;
+      statusEl.textContent = "Scanning logbooks... this may take a moment.";
+      const res = await fetch(`/api/ships/${currentShipId}/triage`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = `Error: ${data.error}`;
+      } else {
+        statusEl.textContent = "Scan complete.";
+        renderDossier(data);
+        await loadShips();
+        shipSelect.value = currentShipId;
+      }
+      scanBtn.disabled = false;
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      if (!currentShipId) return;
+      await fetch(`/api/ships/${currentShipId}/save`, { method: "POST" });
+      saveBtn.textContent = "Saved ★";
+      saveBtn.disabled = true;
+      await loadShips();
+      shipSelect.value = currentShipId;
+    });
+
+    deepDiveBtn.addEventListener("click", async () => {
+      if (!currentShipId) return;
+      const res = await fetch(`/api/ships/${currentShipId}/deep-dive`, { method: "POST" });
+      const data = await res.json();
+      statusEl.textContent = data.message;
+    });
+
+    // Shut down Flask server when the browser window/tab is closed
+    window.addEventListener("pagehide", () => {
+      navigator.sendBeacon("/api/shutdown");
+    });
+
+    loadShips();
+  </script>
+</body>
+</html>
