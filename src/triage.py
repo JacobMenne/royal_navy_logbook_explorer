@@ -11,14 +11,13 @@ from db import get_connection
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# 1. Strict JSON Schema for Vision-LLM Output
 class PageTriage(BaseModel):
     date_range: str
     lat_lon: str
     remarks_summary: str
+    full_transcription: str
     flagged_keywords: list[str]
 
-# 2. Weighted Keyword Tiers
 KEYWORD_WEIGHTS = {
     # Tier 1: Critical Drama
     "mutiny": 5.0, "mutinous": 5.0, "sunk": 5.0, "wrecked": 5.0,
@@ -40,28 +39,28 @@ Extract:
 1. date_range: The dates covered on this page (e.g., "1798-04-12 to 1798-04-15" or "Unknown").
 2. lat_lon: Any latitude/longitude recorded, or "None".
 3. remarks_summary: A 1-2 sentence summary of notable events (discipline, weather, sightings, combat).
-4. flagged_keywords: Any exact or closely matching terms from this list that appear on the page:
+4. full_transcription: A complete, faithful transcription of all readable handwritten text on the page, preserving line breaks and dates where possible. Use [illegible] for words that cannot be read.
+5. flagged_keywords: Any exact or closely matching terms from this list that appear on the page:
    mutiny, mutinous, sunk, wrecked, captured, struck colours, engagement, broadside, prize,
    flogged, punished, lashes, deserted, court martial, hanged, buried, killed, wounded, chased,
    gale, hurricane, sighted, strange sail, leaking, short of water, sick.
 """
 
 def score_page(keywords: list[str]) -> float:
-    return sum(KEYWORD_WEIGHTS.get(k.lower(), 0.0) for k in keywords)
+    raw_score = sum(KEYWORD_WEIGHTS.get(k.lower(), 0.0) for k in keywords)
+    return round(min(10.0, raw_score), 1)
 
 def calculate_voyage_score(page_scores: list[float], all_keywords: set[str]) -> float:
     if not page_scores:
         return 1.0
-    # Normalize density into a 1-10 scale
     total_points = sum(page_scores)
     density_score = min(10.0, 1.0 + (total_points / max(1, len(page_scores))) * 3.0)
-    
-    # Hard floor for critical historical events
+
     if "mutiny" in all_keywords or "mutinous" in all_keywords:
         density_score = max(density_score, 8.5)
     elif any(k in all_keywords for k in ("engagement", "wrecked", "captured", "broadside")):
         density_score = max(density_score, 7.0)
-        
+
     return round(density_score, 1)
 
 def triage_ship_folder(ship_id: int, folder_path: str):
@@ -102,11 +101,12 @@ def triage_ship_folder(ship_id: int, folder_path: str):
 
             conn.execute("""
                 INSERT INTO triage_pages 
-                (ship_id, page_num, date_range, lat_lon, remarks_summary, flagged_keywords, page_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (ship_id, page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 ship_id, idx, data.date_range, data.lat_lon,
-                data.remarks_summary, json.dumps(data.flagged_keywords), p_score
+                data.remarks_summary, data.full_transcription,
+                json.dumps(data.flagged_keywords), p_score
             ))
 
         final_score = calculate_voyage_score(page_scores, all_keywords)
@@ -118,8 +118,7 @@ def triage_ship_folder(ship_id: int, folder_path: str):
             WHERE id = ?
         """, (final_score, summary_text, ship_id))
 
-    print(f"\nTriage complete! Final Interest Score: {final_score}/10")
+    print(f"\nScan complete! Final Interest Score: {final_score}/10")
 
 if __name__ == "__main__":
-    # Quick smoke-test usage once you drop sample pages in data/raw_logs/hms_test/
-    print("Ready. Import triage_ship_folder() or wire it to the CLI/Web UI.")
+    print("Ready. Import triage_ship_folder() or run via src/app.py.")

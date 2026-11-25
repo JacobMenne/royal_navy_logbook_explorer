@@ -40,9 +40,9 @@ def get_ship_detail(ship_id):
             return jsonify({"error": "Ship not found"}), 404
 
         pages = conn.execute("""
-            SELECT page_num, date_range, lat_lon, remarks_summary, flagged_keywords, page_score
+            SELECT page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score
             FROM triage_pages
-            WHERE ship_id = ? AND page_score > 0
+            WHERE ship_id = ?
             ORDER BY page_score DESC, page_num ASC
         """, (ship_id,)).fetchall()
 

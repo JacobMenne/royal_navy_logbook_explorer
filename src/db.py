@@ -32,6 +32,7 @@ def init_db():
                 date_range TEXT,
                 lat_lon TEXT,
                 remarks_summary TEXT,
+                full_transcription TEXT,
                 flagged_keywords TEXT, -- JSON list
                 page_score REAL,
                 FOREIGN KEY (ship_id) REFERENCES ships(id)
@@ -45,6 +46,10 @@ def init_db():
                 FOREIGN KEY (ship_id) REFERENCES ships(id)
             );
         """)
+        # Migrate existing DB if full_transcription column doesn't exist yet
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(triage_pages)").fetchall()]
+        if "full_transcription" not in cols:
+            conn.execute("ALTER TABLE triage_pages ADD COLUMN full_transcription TEXT")
     print(f"Database initialized at {DB_PATH}")
 
 if __name__ == "__main__":
