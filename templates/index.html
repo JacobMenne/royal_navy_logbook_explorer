@@ -19,7 +19,29 @@
       color: #231911;
     }
     h1 { margin-bottom: 0.25rem; font-size: 1.75rem; letter-spacing: 0.01em; }
-    .subtitle { color: #5c4b37; margin-top: 0; margin-bottom: 1.5rem; font-size: 0.95rem; }
+    .subtitle { color: #5c4b37; margin-top: 0; margin-bottom: 1.25rem; font-size: 0.95rem; }
+    .source-toggle {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .toggle-btn {
+      flex: 1;
+      background: #ede3ce;
+      color: #5c4b37;
+      border: 1px solid #c7b699;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .toggle-btn:hover:not(.active) { background: #e3d6bc; }
+    .toggle-btn.active {
+      background: #3d2c1e;
+      color: #f7f1e3;
+      border-color: #3d2c1e;
+    }
     .controls {
       display: flex;
       gap: 0.75rem;
@@ -139,6 +161,11 @@
   <h1>Royal Navy Logbook Explorer</h1>
   <p class="subtitle">Select a vessel to inspect or scan its logbooks (1756–1815).</p>
 
+  <div class="source-toggle">
+    <button id="btnStructured" class="toggle-btn active">CLIWOC Archive (Structured)</button>
+    <button id="btnRawScan" class="toggle-btn">Handwritten Scans (Vision-LLM)</button>
+  </div>
+
   <div class="controls">
     <select id="shipSelect">
       <option value="">-- Select a Ship --</option>
@@ -176,8 +203,11 @@
     const dossier = document.getElementById("dossier");
     const saveBtn = document.getElementById("saveBtn");
     const deepDiveBtn = document.getElementById("deepDiveBtn");
+    const btnStructured = document.getElementById("btnStructured");
+    const btnRawScan = document.getElementById("btnRawScan");
 
     let currentShipId = null;
+    let currentSource = "structured";
 
     function escapeHtml(str) {
       return String(str || "")
@@ -187,17 +217,28 @@
     }
 
     async function loadShips() {
-      const res = await fetch("/api/ships");
+      const res = await fetch(`/api/ships?source_type=${currentSource}`);
       const ships = await res.json();
       shipSelect.innerHTML = '<option value="">-- Select a Ship --</option>';
       ships.forEach(s => {
-        const score = s.interest_score !== null ? ` [Score: ${s.interest_score}/10]` : "";
+        const score = s.interest_score !== null ? `[${s.interest_score}/10] ` : "";
         const saved = s.is_saved ? " ★" : "";
         const opt = document.createElement("option");
         opt.value = s.id;
-        opt.textContent = `${s.ship_name} (${s.year_start}–${s.year_end} | ${s.ship_class || "Unknown"})${score}${saved}`;
+        opt.textContent = `${score}${s.ship_name} (${s.year_start}–${s.year_end} | ${s.ship_class || "Unknown"})${saved}`;
         shipSelect.appendChild(opt);
       });
+    }
+
+    function setSource(source) {
+      currentSource = source;
+      btnStructured.classList.toggle("active", source === "structured");
+      btnRawScan.classList.toggle("active", source === "raw_scan");
+      currentShipId = null;
+      scanBtn.disabled = true;
+      dossier.style.display = "none";
+      statusEl.textContent = "";
+      loadShips();
     }
 
     function renderDossier(data) {
@@ -248,6 +289,9 @@
         saveBtn.style.display = "none";
       }
     }
+
+    btnStructured.addEventListener("click", () => setSource("structured"));
+    btnRawScan.addEventListener("click", () => setSource("raw_scan"));
 
     shipSelect.addEventListener("change", async () => {
       currentShipId = shipSelect.value;

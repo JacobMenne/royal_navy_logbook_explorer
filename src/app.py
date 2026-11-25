@@ -1,11 +1,11 @@
-from ingest_cliwoc import scan_cliwoc_ship
 import json
 import os
 import threading
 import webbrowser
 from pathlib import Path
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from db import get_connection, init_db
+from ingest_cliwoc import scan_cliwoc_ship
 from triage import triage_ship_folder
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,14 +17,22 @@ def index():
 
 @app.route("/api/ships", methods=["GET"])
 def list_ships():
+    source_type = request.args.get("source_type")
+    query = """
+        SELECT s.*, 
+               CASE WHEN sv.ship_id IS NOT NULL THEN 1 ELSE 0 END AS is_saved
+        FROM ships s
+        LEFT JOIN saved_voyages sv ON s.id = sv.ship_id
+    """
+    params = []
+    if source_type in ("structured", "raw_scan"):
+        query += " WHERE s.source_type = ?"
+        params.append(source_type)
+
+    query += " ORDER BY (s.interest_score IS NULL) ASC, s.interest_score DESC, s.ship_name ASC"
+
     with get_connection() as conn:
-        rows = conn.execute("""
-            SELECT s.*, 
-                   CASE WHEN sv.ship_id IS NOT NULL THEN 1 ELSE 0 END AS is_saved
-            FROM ships s
-            LEFT JOIN saved_voyages sv ON s.id = sv.ship_id
-            ORDER BY s.ship_name ASC
-        """).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route("/api/ships/<int:ship_id>", methods=["GET"])
