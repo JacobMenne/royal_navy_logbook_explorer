@@ -1,3 +1,4 @@
+from ingest_cliwoc import scan_cliwoc_ship
 import json
 import os
 import threading
@@ -61,16 +62,17 @@ def run_triage(ship_id):
         if not ship:
             return jsonify({"error": "Ship not found"}), 404
 
-        if ship["source_type"] != "raw_scan":
-            return jsonify({"error": "Structured CLIWOC scanning not wired up yet."}), 400
-
-        folder = Path(ship["source_path"])
-        if not folder.exists():
-            return jsonify({"error": f"Folder not found: {folder}. Add scan images there first."}), 400
+        source = Path(ship["source_path"])
+        if not source.exists():
+            return jsonify({"error": f"Source not found: {source}."}), 400
 
         conn.execute("DELETE FROM triage_pages WHERE ship_id = ?", (ship_id,))
 
-    triage_ship_folder(ship_id, str(folder))
+    if ship["source_type"] == "raw_scan":
+        triage_ship_folder(ship_id, str(source))
+    else:
+        scan_cliwoc_ship(ship_id, ship["ship_name"], str(source))
+
     return get_ship_detail(ship_id)
 
 @app.route("/api/ships/<int:ship_id>/save", methods=["POST"])
