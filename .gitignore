@@ -5,3 +5,5 @@ __pycache__/
 data/raw_logs/*
 data/structured/*
 data/*.db
+data/*.db-*
+!data/navy_logs.db

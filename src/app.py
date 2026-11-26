@@ -55,8 +55,7 @@ def get_library():
         """).fetchall()
     return jsonify([dict(r) for r in rows])
 
-@app.route("/api/ships/<int:ship_id>", methods=["GET"])
-def get_ship_detail(ship_id):
+def build_ship_detail_payload(ship_id: int, scan_progress: dict | None = None):
     with get_connection() as conn:
         ship = conn.execute("""
             SELECT s.*, 
@@ -66,7 +65,7 @@ def get_ship_detail(ship_id):
             WHERE s.id = ?
         """, (ship_id,)).fetchone()
         if not ship:
-            return jsonify({"error": "Ship not found"}), 404
+            return None
 
         pages = conn.execute("""
             SELECT page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score
@@ -81,7 +80,17 @@ def get_ship_detail(ship_id):
         item["flagged_keywords"] = json.loads(item["flagged_keywords"] or "[]")
         flagged.append(item)
 
-    return jsonify({"ship": dict(ship), "flagged_pages": flagged})
+    payload = {"ship": dict(ship), "flagged_pages": flagged}
+    if scan_progress is not None:
+        payload["scan_progress"] = scan_progress
+    return payload
+
+@app.route("/api/ships/<int:ship_id>", methods=["GET"])
+def get_ship_detail(ship_id):
+    payload = build_ship_detail_payload(ship_id)
+    if not payload:
+        return jsonify({"error": "Ship not found"}), 404
+    return jsonify(payload)
 
 @app.route("/api/ships/<int:ship_id>/triage", methods=["POST"])
 def run_triage(ship_id):
@@ -89,20 +98,19 @@ def run_triage(ship_id):
         ship = conn.execute("SELECT * FROM ships WHERE id = ?", (ship_id,)).fetchone()
         if not ship:
             return jsonify({"error": "Ship not found"}), 404
-
         source_path = ship["source_path"]
-        conn.execute("DELETE FROM triage_pages WHERE ship_id = ?", (ship_id,))
 
+    scan_progress = None
     try:
         if ship["source_type"] == "raw_scan":
-            if source_path.startswith(("http://", "https://")):
+            if source_path.strip().startswith(("[", "http://", "https://")):
                 local_folder = download_corral_logbook(source_path, ship["ship_name"])
-                triage_ship_folder(ship_id, str(local_folder))
+                scan_progress = triage_ship_folder(ship_id, str(local_folder), batch_size=25)
             else:
                 source = Path(source_path)
                 if not source.exists():
                     return jsonify({"error": f"Folder not found: {source}."}), 400
-                triage_ship_folder(ship_id, str(source))
+                scan_progress = triage_ship_folder(ship_id, str(source), batch_size=25)
         else:
             source = Path(source_path)
             if not source.exists():
@@ -111,7 +119,7 @@ def run_triage(ship_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return get_ship_detail(ship_id)
+    return jsonify(build_ship_detail_payload(ship_id, scan_progress=scan_progress))
 
 @app.route("/api/ships/<int:ship_id>/save", methods=["POST"])
 def save_voyage(ship_id):

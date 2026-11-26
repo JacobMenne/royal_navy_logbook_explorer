@@ -474,6 +474,7 @@
       btnRawScan.classList.toggle("active", source === "raw_scan");
       currentShipId = null;
       scanBtn.disabled = true;
+      scanBtn.textContent = "Scan Logbooks";
       dossier.style.display = "none";
       mapSection.style.display = "none";
       statusEl.textContent = "";
@@ -489,6 +490,12 @@
       document.getElementById("shipTitle").textContent = ship.ship_name;
       document.getElementById("shipMeta").textContent =
         `${ship.ship_class || "Unknown Class"} • ${ship.year_start}–${ship.year_end} • Source: ${ship.source_type}`;
+
+      if (ship.source_type === "raw_scan" && flagged_pages.length > 0) {
+        scanBtn.textContent = "Resume Scan (+25 pages)";
+      } else {
+        scanBtn.textContent = "Scan Logbooks";
+      }
 
       const badge = document.getElementById("scoreBadge");
       badge.className = "score-badge";
@@ -666,6 +673,7 @@
       statusEl.textContent = "";
       if (!currentShipId) {
         dossier.style.display = "none";
+        scanBtn.textContent = "Scan Logbooks";
         return;
       }
       const res = await fetch(`/api/ships/${currentShipId}`);
@@ -675,14 +683,21 @@
     scanBtn.addEventListener("click", async () => {
       if (!currentShipId) return;
       scanBtn.disabled = true;
-      statusEl.textContent = "Scanning logbooks... watch PowerShell for live page progress.";
+      statusEl.textContent = "Scanning next batch (up to 25 pages)... watch PowerShell for live progress.";
       try {
         const res = await fetch(`/api/ships/${currentShipId}/triage`, { method: "POST" });
         const data = await res.json();
         if (!res.ok) {
           statusEl.textContent = `Error: ${data.error}`;
         } else {
-          statusEl.textContent = "Scan complete.";
+          if (data.scan_progress) {
+            const { scanned_now, total_scanned, total_images } = data.scan_progress;
+            statusEl.textContent = total_scanned < total_images
+              ? `Scanned +${scanned_now} pages (${total_scanned}/${total_images} total). Click 'Resume Scan' to continue.`
+              : `All ${total_images} pages scanned!`;
+          } else {
+            statusEl.textContent = "Scan complete.";
+          }
           renderDossier(data);
           await loadShips();
           shipSelect.value = currentShipId;

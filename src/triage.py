@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -98,59 +99,104 @@ def scan_page_with_retry(img: Image.Image, max_attempts: int = 3) -> PageTriage:
             print(f"  Temporary API error ({e}). Retrying in {wait}s...", flush=True)
             time.sleep(wait)
 
-def triage_ship_folder(ship_id: int, folder_path: str):
+def _scan_worker(idx: int, total_images: int, img_path: Path) -> tuple[int, PageTriage]:
+    print(f"Scanning page {idx}/{total_images}: {img_path.name}...", flush=True)
+    img = Image.open(img_path)
+    img.thumbnail((1600, 1600))
+    data = scan_page_with_retry(img)
+    return idx, data
+
+def triage_ship_folder(ship_id: int, folder_path: str, batch_size: int = 25, max_workers: int = 4) -> dict:
+    """
+    Parallel resumable scanner: skips already-scanned page_nums, scans up to
+    `batch_size` new pages concurrently, and commits each page immediately.
+    """
     image_files = sorted(
         p for p in Path(folder_path).iterdir()
         if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
     )
+    total_images = len(image_files)
     if not image_files:
         print(f"No images found in {folder_path}", flush=True)
-        return
-
-    page_scores = []
-    all_keywords = set()
-    flagged_summaries = []
-    detected_names = []
-    detected_years = []
+        return {"scanned_now": 0, "total_scanned": 0, "total_images": 0}
 
     with get_connection() as conn:
-        for idx, img_path in enumerate(image_files, start=1):
-            print(f"Scanning page {idx}/{len(image_files)}: {img_path.name}...", flush=True)
-            try:
-                img = Image.open(img_path)
-                img.thumbnail((1600, 1600))
-                data = scan_page_with_retry(img)
-            except Exception as e:
-                print(f"  Skipping page {idx} ({img_path.name}) after retries: {e}", flush=True)
-                continue
+        existing_nums = {
+            r["page_num"]
+            for r in conn.execute("SELECT page_num FROM triage_pages WHERE ship_id = ?", (ship_id,)).fetchall()
+        }
 
-            if data.detected_ship_name and data.detected_ship_name.strip().lower() not in {"unknown", "none", "n/a"}:
-                detected_names.append(data.detected_ship_name.strip())
+    to_scan = [
+        (idx, img_path)
+        for idx, img_path in enumerate(image_files, start=1)
+        if idx not in existing_nums
+    ]
+    if batch_size:
+        to_scan = to_scan[:batch_size]
 
-            years_in_page = [int(y) for y in re.findall(r"\b(17\d{2}|18\d{2})\b", data.date_range)]
-            detected_years.extend(years_in_page)
+    scanned_now = 0
+    detected_names = []
 
-            p_score = score_page(data.flagged_keywords)
-            page_scores.append(p_score)
-            all_keywords.update(k.lower() for k in data.flagged_keywords)
+    if to_scan:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_scan_worker, idx, total_images, img_path): (idx, img_path)
+                for idx, img_path in to_scan
+            }
+            for future in as_completed(futures):
+                idx, img_path = futures[future]
+                try:
+                    page_idx, data = future.result()
+                except Exception as e:
+                    print(f"  Skipping page {idx} ({img_path.name}) after retries: {e}", flush=True)
+                    continue
 
-            if p_score > 0:
-                flagged_summaries.append(f"Page {idx} ({data.date_range}): {data.remarks_summary}")
+                if data.detected_ship_name and data.detected_ship_name.strip().lower() not in {"unknown", "none", "n/a"}:
+                    detected_names.append(data.detected_ship_name.strip())
 
-            conn.execute("""
-                INSERT INTO triage_pages 
-                (ship_id, page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                ship_id, idx, data.date_range, data.lat_lon,
-                data.remarks_summary, data.full_transcription,
-                json.dumps(data.flagged_keywords), p_score
-            ))
+                p_score = score_page(data.flagged_keywords)
 
-            time.sleep(1.0)
+                with get_connection() as conn:
+                    conn.execute("""
+                        INSERT INTO triage_pages 
+                        (ship_id, page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        ship_id, page_idx, data.date_range, data.lat_lon,
+                        data.remarks_summary, data.full_transcription,
+                        json.dumps(data.flagged_keywords), p_score
+                    ))
+
+                scanned_now += 1
+
+    # Recompute overall voyage summary, score, and metadata across ALL scanned pages
+    with get_connection() as conn:
+        all_pages = conn.execute("""
+            SELECT page_num, date_range, remarks_summary, flagged_keywords, page_score
+            FROM triage_pages
+            WHERE ship_id = ?
+            ORDER BY page_num ASC
+        """, (ship_id,)).fetchall()
+
+        page_scores = [p["page_score"] or 0.0 for p in all_pages]
+        all_keywords = set()
+        flagged_summaries = []
+        detected_years = []
+
+        for p in all_pages:
+            kws = json.loads(p["flagged_keywords"] or "[]")
+            all_keywords.update(k.lower() for k in kws)
+            years = [int(y) for y in re.findall(r"\b(17\d{2}|18\d{2})\b", p["date_range"] or "")]
+            detected_years.extend(years)
+            if (p["page_score"] or 0) > 0:
+                flagged_summaries.append(f"Page {p['page_num']} ({p['date_range']}): {p['remarks_summary']}")
 
         final_score = calculate_voyage_score(page_scores, all_keywords)
-        summary_text = "\n".join(flagged_summaries[:10]) if flagged_summaries else "Routine voyage; no major incidents flagged."
+        header_line = f"Scanned {len(all_pages)} of {total_images} pages."
+        if flagged_summaries:
+            summary_text = header_line + "\n\n" + "\n".join(flagged_summaries[:12])
+        else:
+            summary_text = header_line + "\n\nRoutine voyage so far; no major incidents flagged."
 
         ship_row = conn.execute("SELECT ship_name, year_start, year_end FROM ships WHERE id = ?", (ship_id,)).fetchone()
         new_name = ship_row["ship_name"]
@@ -174,7 +220,8 @@ def triage_ship_folder(ship_id: int, folder_path: str):
             WHERE id = ?
         """, (new_name, new_start, new_end, final_score, summary_text, ship_id))
 
-    print(f"\nScan complete! Final Interest Score: {final_score}/10", flush=True)
+    print(f"\nBatch complete: +{scanned_now} pages ({len(all_pages)}/{total_images} total). Score: {final_score}/10", flush=True)
+    return {"scanned_now": scanned_now, "total_scanned": len(all_pages), "total_images": total_images}
 
 def generate_deep_dive(ship_id: int) -> str:
     with get_connection() as conn:

@@ -1,7 +1,10 @@
+import json
 import re
 import sys
 import time
 import urllib.request
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, unquote, urlparse
@@ -29,7 +32,7 @@ class LinkParser(HTMLParser):
 
 def fetch_links(url: str) -> list[str]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         html = resp.read().decode("utf-8", errors="replace")
     parser = LinkParser()
     parser.feed(html)
@@ -41,11 +44,6 @@ def extract_years(text: str) -> tuple[int | None, int | None]:
         return None, None
     return min(years), max(years)
 
-def clean_folder_name(url: str) -> str:
-    parts = [unquote(p) for p in urlparse(url).path.strip("/").split("/") if p]
-    label = " - ".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-    return label.replace("_", " ").strip()
-
 def normalize_dir_url(url: str) -> str:
     return url if url.endswith("/") else url + "/"
 
@@ -53,17 +51,38 @@ def format_elapsed(start_time: float) -> str:
     secs = int(time.time() - start_time)
     return f"{secs // 60:02d}:{secs % 60:02d}"
 
+def parse_volume_key(url: str) -> tuple[str, int]:
+    """
+    Groups multi-part folders like .../adm51/p3054-3/ into ('adm51 - p3054', 3).
+    Single-part folders like .../adm53/p0078/ become ('adm53 - p0078', 1).
+    """
+    parts = [unquote(p) for p in urlparse(url).path.strip("/").split("/") if p]
+    series = parts[-2] if len(parts) >= 2 else "corral"
+    folder = parts[-1]
+
+    match = re.match(r"^(.+?)-(\d+)$", folder)
+    if match:
+        base_code = match.group(1)
+        part_num = int(match.group(2))
+    else:
+        base_code = folder
+        part_num = 1
+
+    volume_label = f"{series} - {base_code}".replace("_", " ").strip()
+    return volume_label, part_num
+
 def crawl_corral(base_url: str = CORRAL_BASE_URL, max_depth: int = 4, limit: int = 30):
     init_db()
     base_url = normalize_dir_url(base_url)
-    discovered = []
+    grouped_volumes = defaultdict(list)
     stack = [(base_url, 0)]
     visited = set()
+    folders_found = 0
     start_time = time.time()
 
-    print(f"Indexing CEDA/CORRAL archive from {base_url} (limit={limit})...", flush=True)
+    print(f"Indexing CEDA/CORRAL archive from {base_url} (folder limit={limit})...", flush=True)
 
-    while stack and len(discovered) < limit:
+    while stack and folders_found < limit:
         url, depth = stack.pop()
         if url in visited:
             continue
@@ -83,20 +102,21 @@ def crawl_corral(base_url: str = CORRAL_BASE_URL, max_depth: int = 4, limit: int
             for l in links
             if l and not l.startswith(("#", "?", "mailto:", "javascript:"))
         ]
-        # CEDA serves image downloads from dap.ceda.ac.uk, so don't require u.startswith(url)
         jpg_links = sorted({u for u in resolved if u.lower().endswith((".jpg", ".jpeg"))})
 
         if jpg_links:
-            folder_label = clean_folder_name(url)
-            y_start, y_end = extract_years(folder_label)
-            discovered.append({
-                "ship_name": folder_label,
-                "year_start": y_start or 1756,
-                "year_end": y_end or 1815,
+            vol_label, part_num = parse_volume_key(url)
+            grouped_volumes[vol_label].append({
+                "part_num": part_num,
                 "url": url,
                 "page_count": len(jpg_links),
             })
-            print(f"[{format_elapsed(start_time)}]   FOUND ({len(discovered)}/{limit}): {folder_label} ({len(jpg_links)} pages)", flush=True)
+            folders_found += 1
+            print(
+                f"[{format_elapsed(start_time)}]   FOUND ({folders_found}/{limit}): "
+                f"{vol_label} [Part {part_num}] ({len(jpg_links)} pages)",
+                flush=True,
+            )
             continue
 
         if depth < max_depth:
@@ -112,59 +132,98 @@ def crawl_corral(base_url: str = CORRAL_BASE_URL, max_depth: int = 4, limit: int
             stack.extend(reversed(children))
 
     inserted = 0
+    updated = 0
     with get_connection() as conn:
-        for item in discovered:
-            exists = conn.execute(
-                "SELECT id FROM ships WHERE source_path = ? AND source_type = 'raw_scan'",
-                (item["url"],),
+        for vol_label, parts in sorted(grouped_volumes.items()):
+            parts.sort(key=lambda x: x["part_num"])
+            urls = [p["url"] for p in parts]
+            total_pages = sum(p["page_count"] for p in parts)
+            part_count = len(parts)
+            source_json = json.dumps(urls)
+            y_start, y_end = extract_years(vol_label)
+            ship_class = f"CORRAL ({part_count} {'part' if part_count == 1 else 'parts'}, {total_pages} pages)"
+
+            existing = conn.execute(
+                "SELECT id FROM ships WHERE ship_name LIKE ? AND source_type = 'raw_scan'",
+                (f"%{vol_label}%",),
             ).fetchone()
-            if exists:
-                continue
 
-            conn.execute(
-                """
-                INSERT INTO ships (ship_name, ship_class, year_start, year_end, source_type, source_path)
-                VALUES (?, ?, ?, ?, 'raw_scan', ?)
-                """,
-                (
-                    item["ship_name"],
-                    f"CORRAL ({item['page_count']} pages)",
-                    item["year_start"],
-                    item["year_end"],
-                    item["url"],
-                ),
-            )
-            inserted += 1
+            if existing:
+                conn.execute(
+                    "UPDATE ships SET ship_class = ?, source_path = ? WHERE id = ?",
+                    (ship_class, source_json, existing["id"]),
+                )
+                updated += 1
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO ships (ship_name, ship_class, year_start, year_end, source_type, source_path)
+                    VALUES (?, ?, ?, ?, 'raw_scan', ?)
+                    """,
+                    (vol_label, ship_class, y_start or 1756, y_end or 1815, source_json),
+                )
+                inserted += 1
 
-    print(f"\n[{format_elapsed(start_time)}] CORRAL indexing complete: added {inserted} handwritten logbooks to data/navy_logs.db.", flush=True)
+    print(
+        f"\n[{format_elapsed(start_time)}] CORRAL indexing complete: "
+        f"added {inserted} grouped volumes, updated {updated} in data/navy_logs.db.",
+        flush=True,
+    )
 
-def download_corral_logbook(remote_url: str, ship_name: str, max_pages: int | None = None) -> Path:
+def _download_one(img_url: str, dest: Path):
+    req = urllib.request.Request(img_url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as resp, open(dest, "wb") as out:
+        out.write(resp.read())
+    return dest.name
+
+def download_corral_logbook(source_path: str, ship_name: str, max_workers: int = 5) -> Path:
+    """
+    Accepts either a single CEDA URL or a JSON list of part URLs.
+    Downloads all parts concurrently into data/raw_logs/<slug>/ with part prefixes
+    (p01_, p02_...) so alphabetical sorting preserves chronological page order.
+    """
+    if source_path.strip().startswith("["):
+        urls = json.loads(source_path)
+    else:
+        urls = [source_path]
+
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", ship_name).strip("_").lower()
     local_dir = RAW_LOGS_DIR / slug
     local_dir.mkdir(parents=True, exist_ok=True)
 
-    existing = list(local_dir.glob("*.jpg")) + list(local_dir.glob("*.jpeg"))
-    if existing:
-        print(f"Using {len(existing)} already-downloaded pages in {local_dir}", flush=True)
-        return local_dir
+    for part_idx, remote_url in enumerate(urls, start=1):
+        prefix = f"p{part_idx:02d}_"
+        existing_part = list(local_dir.glob(f"{prefix}*.jpg")) + list(local_dir.glob(f"{prefix}*.jpeg"))
+        if existing_part:
+            print(f"Part {part_idx}/{len(urls)} already downloaded ({len(existing_part)} pages).", flush=True)
+            continue
 
-    print(f"Fetching image list from {remote_url}...", flush=True)
-    links = fetch_links(remote_url)
-    jpg_urls = sorted({
-        urljoin(remote_url, l).split("#")[0].split("?")[0]
-        for l in links
-        if l.lower().split("?")[0].endswith((".jpg", ".jpeg"))
-    })
-    if max_pages:
-        jpg_urls = jpg_urls[:max_pages]
+        print(f"Fetching image list for Part {part_idx}/{len(urls)}: {remote_url}...", flush=True)
+        links = fetch_links(remote_url)
+        jpg_urls = sorted({
+            urljoin(remote_url, l).split("#")[0].split("?")[0]
+            for l in links
+            if l.lower().split("?")[0].endswith((".jpg", ".jpeg"))
+        })
 
-    for idx, img_url in enumerate(jpg_urls, start=1):
-        filename = Path(unquote(urlparse(img_url).path)).name
-        dest = local_dir / filename
-        print(f"Downloading page {idx}/{len(jpg_urls)}: {filename}...", flush=True)
-        req = urllib.request.Request(img_url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=30) as resp, open(dest, "wb") as out:
-            out.write(resp.read())
+        tasks = []
+        for img_url in jpg_urls:
+            raw_name = Path(unquote(urlparse(img_url).path)).name
+            dest = local_dir / f"{prefix}{raw_name}"
+            if not dest.exists():
+                tasks.append((img_url, dest))
+
+        if tasks:
+            done = 0
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_download_one, u, d) for u, d in tasks]
+                for future in as_completed(futures):
+                    done += 1
+                    try:
+                        fname = future.result()
+                        print(f"  Part {part_idx}/{len(urls)} — Downloaded {done}/{len(tasks)}: {fname}", flush=True)
+                    except Exception as e:
+                        print(f"  Part {part_idx}/{len(urls)} — Failed download: {e}", flush=True)
 
     return local_dir
 
