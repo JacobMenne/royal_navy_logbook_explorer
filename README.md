@@ -1,30 +1,37 @@
 # Royal Navy Logbook Explorer
 
-A lightweight Python and Vision-LLM pipeline for scanning, scoring, and reconstructing historical narratives from 18th- and 19th-century Royal Navy ship logbooks (1756–1815).
+A local web application for ingesting, transcribing, scoring, and mapping historical Royal Navy ship logbooks (1756–1830s). It pairs instant local analysis of structured maritime datasets (**CLIWOC 2.1**) with on-demand Vision-LLM transcription of raw handwritten Admiralty logbook scans (**CEDA CORRAL**).
 
 ## Features
 
-- **Unified Ship Registry:** Indexes both raw handwritten logbook scans (JPEG/PNG) and structured historical datasets (CLIWOC 2.1) into a local SQLite database.
-- **Vision-LLM Transcription & Scanning:** Uses Gemini Flash-Lite to read 18th/19th-century cursive, extract dates and coordinates, produce full verbatim transcriptions, and flag high-drama events (mutinies, engagements, floggings, desertions, prizes, storms).
-- **0–10 Interest Scoring:** Ranks individual pages and entire voyages using a weighted keyword tier system so routine patrols are separated from notable journeys.
-- **Parchment Web UI:** Minimalist Flask interface that auto-launches in your browser and shuts down cleanly when the tab is closed.
+- **Dual-Source Exploration:** Toggle between the structured **CLIWOC Archive** and **Handwritten Scans (Vision-LLM)** from the CEDA CORRAL (`ADM 51` / `ADM 53`) archives.
+- **Volume Grouping & Resumable Scanning:** Automatically groups multi-part Admiralty folders (e.g., `p3054-1` through `p3054-9`) into a single unified voyage. Scans in resumable 25-page batches with per-page SQLite commits, parallel downloads, and Free Tier rate-limit pacing.
+- **Automated Vessel Identification & Scoring:** Reads handwritten cover and title pages to auto-name vessels and date ranges, then scores pages (1–10) for notable events (mutinies, wrecks, engagements, discipline, gales, and sightings).
+- **Compact Dossier UI:** Displays a scrollable Top-8 severity **Voyage Summary**, collapsible 25-page batches with full verbatim transcriptions, and a dedicated **Saved & Scanned** library view.
+- **Deep Dive Narratives:** Synthesizes sequential logbook transcriptions into a formatted historical report (Voyage Overview, Chronological Narrative, Key Incidents, and Places Mentioned), cached in SQLite.
+- **Interactive Route Maps (Leaflet.js):** Plots daily coordinates and offshore-constrained historical waypoints with custom **START** / **END** badges and clickable event pins.
 
-## Project Structure
+## Tech Stack
 
-```text
-royal_navy_logbook_explorer/
-├── data/
-│   ├── raw_logs/          # Local folders of scanned logbook JPEGs/PNGs per ship
-│   ├── structured/        # Structured datasets (e.g., CLIWOC CSV/TXT)
-│   └── navy_logs.db       # Local SQLite database (auto-generated)
-├── src/
-│   ├── app.py             # Flask server and API endpoints
-│   ├── db.py              # SQLite schema and connection helper
-│   ├── triage.py          # Vision-LLM scanning and 0-10 scoring engine
-│   ├── ingest_cliwoc.py   # CLIWOC 2.1 structured dataset ingester & scanner
-│   └── seed.py            # Initial sample ship seeder
-├── templates/
-│   └── index.html         # Parchment-themed single-page web UI
-├── requirements.txt
-└── .env                   # Local Gemini API key (git-ignored)
+- **Backend:** Python, Flask, SQLite (`data/navy_logs.db`)
+- **Frontend:** Vanilla HTML/CSS/JS, Leaflet.js
+- **AI / Vision-LLM:** Google Gemini API (`gemini-3.5-flash-lite`) via `google-genai` and Pydantic structured outputs
+- **Data Sources:** CLIWOC 2.1 (`CLIWOC21.tsv`) & CEDA CORRAL Admiralty Logbook Scans
+
+## Quick Start (Browse Pre-Scanned Voyages)
+
+`data/navy_logs.db` is included in this repository, so you can explore already-scanned voyages, read full transcriptions, and view route maps immediately **without downloading raw scans or configuring an API key**.
+
+```bash
+git clone [https://github.com/](https://github.com/)<your-username>/royal_navy_logbook_explorer.git
+cd royal_navy_logbook_explorer
+
+python -m venv .venv
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+python src/app.py
 ```

@@ -83,12 +83,20 @@
     }
     select {
       flex: 1;
+      min-width: 0;
+      width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       padding: 0.55rem;
       font-size: 0.95rem;
       color: #24170a;
       background: #fdf7e7;
       border: 1px solid #a67f38;
       border-radius: 4px;
+    }
+    .controls button {
+      flex-shrink: 0;
     }
     button {
       padding: 0.55rem 1rem;
