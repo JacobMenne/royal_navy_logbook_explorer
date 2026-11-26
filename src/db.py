@@ -22,6 +22,7 @@ def init_db():
                 source_path TEXT NOT NULL,
                 interest_score REAL,
                 triage_summary TEXT,
+                deep_dive_narrative TEXT,
                 triaged_at TIMESTAMP
             );
 
@@ -46,10 +47,15 @@ def init_db():
                 FOREIGN KEY (ship_id) REFERENCES ships(id)
             );
         """)
-        # Migrate existing DB if full_transcription column doesn't exist yet
-        cols = [r["name"] for r in conn.execute("PRAGMA table_info(triage_pages)").fetchall()]
-        if "full_transcription" not in cols:
+        # Migrate existing DB columns if missing
+        page_cols = [r["name"] for r in conn.execute("PRAGMA table_info(triage_pages)").fetchall()]
+        if "full_transcription" not in page_cols:
             conn.execute("ALTER TABLE triage_pages ADD COLUMN full_transcription TEXT")
+
+        ship_cols = [r["name"] for r in conn.execute("PRAGMA table_info(ships)").fetchall()]
+        if "deep_dive_narrative" not in ship_cols:
+            conn.execute("ALTER TABLE ships ADD COLUMN deep_dive_narrative TEXT")
+
     print(f"Database initialized at {DB_PATH}")
 
 if __name__ == "__main__":

@@ -235,12 +235,17 @@
       <h3>Voyage Summary</h3>
       <p id="shipSummary" style="white-space: pre-line;"></p>
 
+      <div id="deepDiveSection" style="display: none; margin-top: 1.25rem;">
+        <h3>Deep Dive Narrative</h3>
+        <div id="deepDiveText" class="flagged-item" style="white-space: pre-line; font-family: Georgia, serif;"></div>
+      </div>
+
       <h3>Scanned Pages</h3>
       <div id="flaggedList"></div>
 
       <div class="actions">
         <button id="saveBtn" class="secondary" style="display: none;">Save Voyage</button>
-        <button id="deepDiveBtn">Deep Dive (Full Transcription)</button>
+        <button id="deepDiveBtn" style="display: none;">Deep Dive (Voyage Narrative)</button>
         <button id="mapBtn" class="secondary" disabled title="Coming in Phase 4">Visualize Route</button>
       </div>
     </div>
@@ -389,6 +394,16 @@
       document.getElementById("shipSummary").textContent =
         ship.triage_summary || "No logbook scan summary yet.";
 
+      const deepDiveSection = document.getElementById("deepDiveSection");
+      const deepDiveText = document.getElementById("deepDiveText");
+      if (ship.deep_dive_narrative) {
+        deepDiveSection.style.display = "block";
+        deepDiveText.textContent = ship.deep_dive_narrative;
+      } else {
+        deepDiveSection.style.display = "none";
+        deepDiveText.textContent = "";
+      }
+
       const flaggedList = document.getElementById("flaggedList");
       if (!flagged_pages.length) {
         flaggedList.innerHTML = "<p class='meta'>No pages scanned yet.</p>";
@@ -406,12 +421,21 @@
         `).join("");
       }
 
-      if (isScanned) {
+      if (isScanned && ship.source_type === "raw_scan") {
         saveBtn.style.display = "inline-block";
         saveBtn.textContent = ship.is_saved ? "Saved ★" : "Save Voyage";
         saveBtn.disabled = Boolean(ship.is_saved);
       } else {
         saveBtn.style.display = "none";
+      }
+
+      if (isScanned) {
+        deepDiveBtn.style.display = "inline-block";
+        deepDiveBtn.textContent = ship.deep_dive_narrative
+          ? "Regenerate Deep Dive"
+          : "Deep Dive (Voyage Narrative)";
+      } else {
+        deepDiveBtn.style.display = "none";
       }
     }
 
@@ -477,9 +501,21 @@
 
     deepDiveBtn.addEventListener("click", async () => {
       if (!currentShipId) return;
-      const res = await fetch(`/api/ships/${currentShipId}/deep-dive`, { method: "POST" });
-      const data = await res.json();
-      statusEl.textContent = data.message;
+      deepDiveBtn.disabled = true;
+      statusEl.textContent = "Generating Deep Dive narrative...";
+      try {
+        const res = await fetch(`/api/ships/${currentShipId}/deep-dive`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = `Error: ${data.error}`;
+        } else {
+          statusEl.textContent = "Deep Dive complete.";
+          renderDossier(data);
+        }
+      } catch (err) {
+        statusEl.textContent = `Request failed: ${err.message}`;
+      }
+      deepDiveBtn.disabled = false;
     });
 
     window.addEventListener("pagehide", () => {

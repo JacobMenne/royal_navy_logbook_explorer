@@ -7,7 +7,7 @@ from flask import Flask, jsonify, render_template, request
 from db import get_connection, init_db
 from ingest_cliwoc import scan_cliwoc_ship
 from ingest_corral import download_corral_logbook
-from triage import triage_ship_folder
+from triage import generate_deep_dive, triage_ship_folder
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
@@ -45,7 +45,8 @@ def get_library():
                    sv.saved_at
             FROM ships s
             LEFT JOIN saved_voyages sv ON s.id = sv.ship_id
-            WHERE sv.ship_id IS NOT NULL OR s.interest_score IS NOT NULL
+            WHERE s.source_type = 'raw_scan'
+              AND (sv.ship_id IS NOT NULL OR s.interest_score IS NOT NULL)
             ORDER BY is_saved DESC, s.interest_score DESC, s.ship_name ASC
         """).fetchall()
     return jsonify([dict(r) for r in rows])
@@ -67,7 +68,7 @@ def get_ship_detail(ship_id):
             SELECT page_num, date_range, lat_lon, remarks_summary, full_transcription, flagged_keywords, page_score
             FROM triage_pages
             WHERE ship_id = ?
-            ORDER BY page_score DESC, page_num ASC
+            ORDER BY page_num ASC
         """, (ship_id,)).fetchall()
 
     flagged = []
@@ -119,10 +120,11 @@ def save_voyage(ship_id):
 
 @app.route("/api/ships/<int:ship_id>/deep-dive", methods=["POST"])
 def deep_dive(ship_id):
-    return jsonify({
-        "status": "queued",
-        "message": f"Deep Dive full transcription queued for ship ID {ship_id} (Phase 4)."
-    })
+    try:
+        generate_deep_dive(ship_id)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    return get_ship_detail(ship_id)
 
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():

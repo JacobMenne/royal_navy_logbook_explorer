@@ -164,5 +164,66 @@ def triage_ship_folder(ship_id: int, folder_path: str):
 
     print(f"\nScan complete! Final Interest Score: {final_score}/10", flush=True)
 
+def generate_deep_dive(ship_id: int) -> str:
+    with get_connection() as conn:
+        ship = conn.execute("SELECT * FROM ships WHERE id = ?", (ship_id,)).fetchone()
+        if not ship:
+            raise ValueError("Ship not found.")
+
+        pages = conn.execute("""
+            SELECT page_num, date_range, lat_lon, remarks_summary, full_transcription
+            FROM triage_pages
+            WHERE ship_id = ?
+            ORDER BY page_num ASC
+        """, (ship_id,)).fetchall()
+
+    if not pages:
+        raise ValueError("No scanned pages found. Run 'Scan Logbooks' first.")
+
+    compiled_entries = []
+    for p in pages:
+        text = p["full_transcription"] or p["remarks_summary"] or ""
+        compiled_entries.append(
+            f"--- Page {p['page_num']} ({p['date_range']} | Pos: {p['lat_lon']}) ---\n{text}"
+        )
+
+    log_corpus = "\n\n".join(compiled_entries)
+
+    deep_dive_prompt = f"""
+You are a naval historian writing a compelling, accurate historical dossier based strictly on primary-source ship logbook entries.
+
+Vessel: {ship['ship_name']}
+Class/Info: {ship['ship_class']}
+Years: {ship['year_start']}–{ship['year_end']}
+
+Below are the sequential logbook entries:
+{log_corpus}
+
+Write a clear, engaging Deep Dive report with these sections:
+1. Voyage Overview (2-3 sentences summarizing the ship's mission, timeframe, and general waters).
+2. Chronological Narrative (a flowing, readable account of the voyage in order, weaving together navigation, weather, sightings, encounters, and daily shipboard life).
+3. Key Incidents & Highlights (bullet points of the most notable events, hazards, or encounters with dates).
+4. Route & Places Mentioned (ports, islands, capes, or coordinates referenced in the logs).
+
+Stay faithful to the logbook text—do not invent events not supported by the entries.
+"""
+
+    print(f"Generating Deep Dive narrative for {ship['ship_name']}...", flush=True)
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=deep_dive_prompt,
+        config=types.GenerateContentConfig(temperature=0.3),
+    )
+    narrative = response.text.strip()
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE ships SET deep_dive_narrative = ? WHERE id = ?",
+            (narrative, ship_id),
+        )
+
+    print("Deep Dive narrative saved.", flush=True)
+    return narrative
+
 if __name__ == "__main__":
     print("Ready. Import triage_ship_folder() or run via src/app.py.")
