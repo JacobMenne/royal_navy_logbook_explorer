@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 import threading
@@ -5,9 +6,12 @@ import webbrowser
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 from db import get_connection, init_db
-from ingest_cliwoc import scan_cliwoc_ship
+from ingest_cliwoc import (
+    YEAR_MAX, YEAR_MIN, clean_val, detect_delimiter,
+    extract_narrative, parse_year, scan_cliwoc_ship,
+)
 from ingest_corral import download_corral_logbook
-from triage import generate_deep_dive, triage_ship_folder
+from triage import extract_route_waypoints, generate_deep_dive, triage_ship_folder
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
@@ -125,6 +129,55 @@ def deep_dive(ship_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     return get_ship_detail(ship_id)
+
+@app.route("/api/ships/<int:ship_id>/route", methods=["GET"])
+def get_ship_route(ship_id):
+    with get_connection() as conn:
+        ship = conn.execute("SELECT * FROM ships WHERE id = ?", (ship_id,)).fetchone()
+        if not ship:
+            return jsonify({"error": "Ship not found"}), 404
+
+    try:
+        if ship["source_type"] == "structured":
+            path = Path(ship["source_path"])
+            if not path.exists():
+                return jsonify({"error": f"Source file not found: {path}"}), 400
+
+            delimiter = detect_delimiter(path)
+            waypoints = []
+            with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as f:
+                reader = csv.DictReader(f, delimiter=delimiter)
+                for row in reader:
+                    if (row.get("ShipName") or "").strip() != ship["ship_name"]:
+                        continue
+                    year = parse_year(row)
+                    if not year or not (YEAR_MIN <= year <= YEAR_MAX):
+                        continue
+                    try:
+                        lat = float(clean_val(row.get("Lat3") or row.get("Lat")))
+                        lon = float(clean_val(row.get("Lon3") or row.get("Lon")))
+                    except ValueError:
+                        continue
+
+                    date_str = f"{row.get('Year', '?')}-{row.get('Month', '?')}-{row.get('Day', '?')}"
+                    narrative = extract_narrative(row)
+                    v_from = clean_val(row.get("VoyageFrom"))
+                    v_to = clean_val(row.get("VoyageTo"))
+                    place = f"{v_from} → {v_to}" if (v_from or v_to) else "At Sea"
+                    waypoints.append({
+                        "date": date_str,
+                        "place_name": place,
+                        "lat": lat,
+                        "lon": lon,
+                        "summary": narrative or "Routine daily position.",
+                        "is_event": bool(narrative),
+                    })
+            return jsonify({"waypoints": waypoints})
+        else:
+            waypoints = extract_route_waypoints(ship_id)
+            return jsonify({"waypoints": waypoints})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():

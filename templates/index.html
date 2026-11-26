@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Royal Navy Logbook Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -143,6 +145,7 @@
       margin-top: 1.25rem;
       padding-top: 1rem;
       border-top: 1px solid #c9a661;
+      flex-wrap: wrap;
     }
     .flagged-item {
       border-left: 3px solid #754c19;
@@ -152,6 +155,68 @@
       border-radius: 0 4px 4px 0;
       font-size: 0.92rem;
     }
+    .narrative-box {
+      background: #fdf7e7;
+      border: 1px solid #c9a661;
+      border-left: 4px solid #754c19;
+      border-radius: 0 6px 6px 0;
+      padding: 1rem 1.25rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 0.95rem;
+      line-height: 1.65;
+    }
+    .narrative-box h4 {
+      margin: 1rem 0 0.4rem;
+      font-size: 1.08rem;
+      color: #2e1c0c;
+      border-bottom: 1px solid #e3cfa3;
+      padding-bottom: 0.2rem;
+    }
+    .narrative-box h4:first-child { margin-top: 0; }
+    .narrative-box p { margin: 0.5rem 0; }
+    .narrative-box ul { margin: 0.4rem 0 0.75rem; padding-left: 1.25rem; }
+    .narrative-box li { margin-bottom: 0.35rem; }
+    .narrative-box hr { border: none; border-top: 1px solid #e3cfa3; margin: 0.9rem 0; }
+    #routeMap {
+      height: 440px;
+      width: 100%;
+      border: 2px solid #8c6829;
+      border-radius: 6px;
+      margin-top: 0.5rem;
+    }
+    .map-legend {
+      display: flex;
+      gap: 1rem;
+      font-size: 0.85rem;
+      color: #3b2510;
+      margin-top: 0.4rem;
+      flex-wrap: wrap;
+    }
+    .legend-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 0.3rem;
+      vertical-align: middle;
+      border: 1.5px solid #24170a;
+    }
+    .pin-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      color: #fdf7e7;
+      border: 2px solid #24170a;
+      border-radius: 12px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+      white-space: nowrap;
+    }
+    .pin-start { background: #266b3a; }
+    .pin-end { background: #8f1d14; }
     .kw {
       display: inline-block;
       background: #ebd094;
@@ -235,18 +300,24 @@
       <h3>Voyage Summary</h3>
       <p id="shipSummary" style="white-space: pre-line;"></p>
 
-      <div id="deepDiveSection" style="display: none; margin-top: 1.25rem;">
-        <h3>Deep Dive Narrative</h3>
-        <div id="deepDiveText" class="flagged-item" style="white-space: pre-line; font-family: Georgia, serif;"></div>
-      </div>
-
       <h3>Scanned Pages</h3>
       <div id="flaggedList"></div>
 
       <div class="actions">
         <button id="saveBtn" class="secondary" style="display: none;">Save Voyage</button>
         <button id="deepDiveBtn" style="display: none;">Deep Dive (Voyage Narrative)</button>
-        <button id="mapBtn" class="secondary" disabled title="Coming in Phase 4">Visualize Route</button>
+        <button id="mapBtn" class="secondary" style="display: none;">Visualize Route</button>
+      </div>
+
+      <div id="deepDiveSection" style="display: none; margin-top: 1.5rem;">
+        <h3>Deep Dive Narrative</h3>
+        <div id="deepDiveText" class="narrative-box"></div>
+      </div>
+
+      <div id="mapSection" style="display: none; margin-top: 1.5rem;">
+        <h3>Voyage Route Map</h3>
+        <div id="mapStatus" class="meta"></div>
+        <div id="routeMap"></div>
       </div>
     </div>
   </div>
@@ -280,6 +351,9 @@
     const dossier = document.getElementById("dossier");
     const saveBtn = document.getElementById("saveBtn");
     const deepDiveBtn = document.getElementById("deepDiveBtn");
+    const mapBtn = document.getElementById("mapBtn");
+    const mapSection = document.getElementById("mapSection");
+    const mapStatus = document.getElementById("mapStatus");
     const btnStructured = document.getElementById("btnStructured");
     const btnRawScan = document.getElementById("btnRawScan");
 
@@ -287,12 +361,46 @@
     let currentSource = "structured";
     let libraryMode = "saved";
     let libraryCache = [];
+    let leafletMap = null;
 
     function escapeHtml(str) {
       return String(str || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
+    }
+
+    function formatMarkdown(md) {
+      const lines = escapeHtml(md).split("\n");
+      let html = "";
+      let inList = false;
+
+      const inlineFmt = s => s
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*(.+?)\*/g, "<em>$1</em>");
+
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) {
+          if (inList) { html += "</ul>"; inList = false; }
+          continue;
+        }
+        if (line === "---") {
+          if (inList) { html += "</ul>"; inList = false; }
+          html += "<hr/>";
+        } else if (line.startsWith("### ")) {
+          if (inList) { html += "</ul>"; inList = false; }
+          html += `<h4>${inlineFmt(line.slice(4))}</h4>`;
+        } else if (line.startsWith("- ") || line.startsWith("* ")) {
+          if (!inList) { html += "<ul>"; inList = true; }
+          html += `<li>${inlineFmt(line.slice(2))}</li>`;
+        } else {
+          if (inList) { html += "</ul>"; inList = false; }
+          html += `<p>${inlineFmt(line)}</p>`;
+        }
+      }
+      if (inList) html += "</ul>";
+      return html;
     }
 
     function showView(view) {
@@ -367,6 +475,7 @@
       currentShipId = null;
       scanBtn.disabled = true;
       dossier.style.display = "none";
+      mapSection.style.display = "none";
       statusEl.textContent = "";
       loadShips();
     }
@@ -376,6 +485,7 @@
       const isScanned = ship.interest_score !== null;
 
       dossier.style.display = "block";
+      mapSection.style.display = "none";
       document.getElementById("shipTitle").textContent = ship.ship_name;
       document.getElementById("shipMeta").textContent =
         `${ship.ship_class || "Unknown Class"} • ${ship.year_start}–${ship.year_end} • Source: ${ship.source_type}`;
@@ -398,10 +508,10 @@
       const deepDiveText = document.getElementById("deepDiveText");
       if (ship.deep_dive_narrative) {
         deepDiveSection.style.display = "block";
-        deepDiveText.textContent = ship.deep_dive_narrative;
+        deepDiveText.innerHTML = formatMarkdown(ship.deep_dive_narrative);
       } else {
         deepDiveSection.style.display = "none";
-        deepDiveText.textContent = "";
+        deepDiveText.innerHTML = "";
       }
 
       const flaggedList = document.getElementById("flaggedList");
@@ -434,9 +544,102 @@
         deepDiveBtn.textContent = ship.deep_dive_narrative
           ? "Regenerate Deep Dive"
           : "Deep Dive (Voyage Narrative)";
+        mapBtn.style.display = "inline-block";
+        mapBtn.disabled = false;
       } else {
         deepDiveBtn.style.display = "none";
+        mapBtn.style.display = "none";
       }
+    }
+
+    function renderRouteMap(waypoints) {
+      mapSection.style.display = "block";
+      if (!waypoints.length) {
+        mapStatus.innerHTML = "No geographical coordinates or landmarks found for this voyage.";
+        return;
+      }
+
+      mapStatus.innerHTML = `
+        Plotted ${waypoints.length} waypoints. Click any pin for date and log details.
+        <div class="map-legend">
+          <span><span class="legend-dot" style="background:#266b3a;"></span>Start of Voyage</span>
+          <span><span class="legend-dot" style="background:#8f1d14;"></span>End of Voyage</span>
+          <span><span class="legend-dot" style="background:#b53324;"></span>Notable Event</span>
+          <span><span class="legend-dot" style="background:#cba052;"></span>Daily Position</span>
+        </div>
+      `;
+
+      if (leafletMap) {
+        leafletMap.remove();
+        leafletMap = null;
+      }
+
+      leafletMap = L.map("routeMap");
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 18
+      }).addTo(leafletMap);
+
+      const coords = waypoints.map(w => [w.lat, w.lon]);
+      const routeLine = L.polyline(coords, {
+        color: "#6e160c",
+        weight: 3,
+        dashArray: "6, 6"
+      }).addTo(leafletMap);
+
+      const startIcon = L.divIcon({
+        className: "",
+        html: '<div class="pin-badge pin-start" style="padding:2px 7px;">START</div>',
+        iconSize: [52, 22],
+        iconAnchor: [26, 11]
+      });
+
+      const endIcon = L.divIcon({
+        className: "",
+        html: '<div class="pin-badge pin-end" style="padding:2px 7px;">END</div>',
+        iconSize: [42, 22],
+        iconAnchor: [21, 11]
+      });
+
+      waypoints.forEach((w, idx) => {
+        const isStart = idx === 0;
+        const isEnd = idx === waypoints.length - 1 && waypoints.length > 1;
+        let marker;
+        let labelPrefix = "";
+
+        if (isStart) {
+          marker = L.marker([w.lat, w.lon], { icon: startIcon, zIndexOffset: 1000 });
+          labelPrefix = "START OF VOYAGE — ";
+        } else if (isEnd) {
+          marker = L.marker([w.lat, w.lon], { icon: endIcon, zIndexOffset: 900 });
+          labelPrefix = "END OF VOYAGE — ";
+        } else if (w.is_event) {
+          marker = L.circleMarker([w.lat, w.lon], {
+            radius: 6,
+            color: "#24170a",
+            fillColor: "#b53324",
+            fillOpacity: 0.9,
+            weight: 2
+          });
+        } else {
+          marker = L.circleMarker([w.lat, w.lon], {
+            radius: 3.5,
+            color: "#543618",
+            fillColor: "#cba052",
+            fillOpacity: 0.85,
+            weight: 1
+          });
+        }
+
+        marker.addTo(leafletMap).bindPopup(
+          `<strong>${labelPrefix}${escapeHtml(w.place_name)}</strong><br/>` +
+          `<em>${escapeHtml(w.date)}</em><br/>` +
+          `${escapeHtml(w.summary)}`
+        );
+      });
+
+      leafletMap.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
+      mapSection.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     tabExplorer.addEventListener("click", () => showView("explorer"));
@@ -511,11 +714,31 @@
         } else {
           statusEl.textContent = "Deep Dive complete.";
           renderDossier(data);
+          document.getElementById("deepDiveSection").scrollIntoView({ behavior: "smooth" });
         }
       } catch (err) {
         statusEl.textContent = `Request failed: ${err.message}`;
       }
       deepDiveBtn.disabled = false;
+    });
+
+    mapBtn.addEventListener("click", async () => {
+      if (!currentShipId) return;
+      mapBtn.disabled = true;
+      statusEl.textContent = "Loading voyage route...";
+      try {
+        const res = await fetch(`/api/ships/${currentShipId}/route`);
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = `Error: ${data.error}`;
+        } else {
+          statusEl.textContent = "Route loaded.";
+          renderRouteMap(data.waypoints || []);
+        }
+      } catch (err) {
+        statusEl.textContent = `Request failed: ${err.message}`;
+      }
+      mapBtn.disabled = false;
     });
 
     window.addEventListener("pagehide", () => {

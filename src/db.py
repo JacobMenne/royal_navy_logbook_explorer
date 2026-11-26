@@ -23,6 +23,7 @@ def init_db():
                 interest_score REAL,
                 triage_summary TEXT,
                 deep_dive_narrative TEXT,
+                route_json TEXT,
                 triaged_at TIMESTAMP
             );
 
@@ -55,6 +56,8 @@ def init_db():
         ship_cols = [r["name"] for r in conn.execute("PRAGMA table_info(ships)").fetchall()]
         if "deep_dive_narrative" not in ship_cols:
             conn.execute("ALTER TABLE ships ADD COLUMN deep_dive_narrative TEXT")
+        if "route_json" not in ship_cols:
+            conn.execute("ALTER TABLE ships ADD COLUMN route_json TEXT")
 
     print(f"Database initialized at {DB_PATH}")
 

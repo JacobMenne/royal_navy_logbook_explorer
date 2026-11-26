@@ -21,6 +21,17 @@ class PageTriage(BaseModel):
     full_transcription: str
     flagged_keywords: list[str]
 
+class Waypoint(BaseModel):
+    date: str
+    place_name: str
+    lat: float
+    lon: float
+    summary: str
+    is_event: bool
+
+class RouteExtraction(BaseModel):
+    waypoints: list[Waypoint]
+
 KEYWORD_WEIGHTS = {
     # Tier 1: Critical Drama
     "mutiny": 5.0, "mutinous": 5.0, "sunk": 5.0, "wrecked": 5.0,
@@ -158,7 +169,8 @@ def triage_ship_folder(ship_id: int, folder_path: str):
         conn.execute("""
             UPDATE ships
             SET ship_name = ?, year_start = ?, year_end = ?,
-                interest_score = ?, triage_summary = ?, triaged_at = CURRENT_TIMESTAMP
+                interest_score = ?, triage_summary = ?, route_json = NULL,
+                triaged_at = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (new_name, new_start, new_end, final_score, summary_text, ship_id))
 
@@ -200,10 +212,17 @@ Below are the sequential logbook entries:
 {log_corpus}
 
 Write a clear, engaging Deep Dive report with these sections:
-1. Voyage Overview (2-3 sentences summarizing the ship's mission, timeframe, and general waters).
-2. Chronological Narrative (a flowing, readable account of the voyage in order, weaving together navigation, weather, sightings, encounters, and daily shipboard life).
-3. Key Incidents & Highlights (bullet points of the most notable events, hazards, or encounters with dates).
-4. Route & Places Mentioned (ports, islands, capes, or coordinates referenced in the logs).
+### Voyage Overview
+(2-3 sentences summarizing the ship's mission, timeframe, and general waters)
+
+### Chronological Narrative
+(a flowing, readable account of the voyage in order, weaving together navigation, weather, sightings, encounters, and daily shipboard life)
+
+### Key Incidents & Highlights
+(bullet points of the most notable events, hazards, or encounters with dates)
+
+### Route & Places Mentioned
+(bullet points of ports, islands, capes, or coordinates referenced in the logs)
 
 Stay faithful to the logbook text—do not invent events not supported by the entries.
 """
@@ -224,6 +243,65 @@ Stay faithful to the logbook text—do not invent events not supported by the en
 
     print("Deep Dive narrative saved.", flush=True)
     return narrative
+
+def extract_route_waypoints(ship_id: int) -> list[dict]:
+    with get_connection() as conn:
+        ship = conn.execute("SELECT * FROM ships WHERE id = ?", (ship_id,)).fetchone()
+        if not ship:
+            raise ValueError("Ship not found.")
+
+        if ship["route_json"]:
+            return json.loads(ship["route_json"])
+
+        pages = conn.execute("""
+            SELECT page_num, date_range, lat_lon, remarks_summary, page_score
+            FROM triage_pages
+            WHERE ship_id = ?
+            ORDER BY page_num ASC
+        """, (ship_id,)).fetchall()
+
+    if not pages:
+        raise ValueError("No scanned pages found. Run 'Scan Logbooks' first.")
+
+    entries_text = "\n".join(
+        f"Page {p['page_num']} ({p['date_range']} | Coords: {p['lat_lon']} | Score: {p['page_score']}): {p['remarks_summary']}"
+        for p in pages
+    )
+
+    prompt = f"""
+You are a historical maritime geographer. Based on the sequential logbook entries below for {ship['ship_name']} ({ship['year_start']}–{ship['year_end']}), extract an ordered list of geographical waypoints representing the ship's voyage.
+
+STRICT GEOGRAPHICAL RULES:
+1. This is an oceangoing sailing vessel—EVERY waypoint MUST be in open water, a coastal anchorage, or a seaport. NEVER place a waypoint inland (e.g., inside Paraguay, Argentina, etc.).
+2. Use exact decimal latitude/longitude if recorded in the log (remember South latitudes and West longitudes are negative).
+3. For open-sea entries without explicit coordinates (such as searching for shoals or sailing between ports), interpolate a realistic offshore maritime position along the sea track between the previous and next known coastal landmarks.
+4. Omit cover pages, title pages, and blank pages that contain no location or movement.
+5. Set is_event=true for notable incidents, sightings, hazards, or port arrivals.
+
+Logbook entries:
+{entries_text}
+"""
+
+    print(f"Extracting route waypoints for {ship['ship_name']}...", flush=True)
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=RouteExtraction,
+            temperature=0.1,
+        ),
+    )
+    extracted = RouteExtraction.model_validate_json(response.text)
+    waypoints = [w.model_dump() for w in extracted.waypoints]
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE ships SET route_json = ? WHERE id = ?",
+            (json.dumps(waypoints), ship_id),
+        )
+
+    return waypoints
 
 if __name__ == "__main__":
     print("Ready. Import triage_ship_folder() or run via src/app.py.")
