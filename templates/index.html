@@ -7,19 +7,46 @@
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      max-width: 820px;
-      margin: 2.5rem auto;
-      padding: 0 1.25rem;
-      color: #2c2218;
-      background: #e6dcc8;
+      max-width: 840px;
+      margin: 2rem auto;
+      padding: 0 1.25rem 3rem;
+      color: #24170a;
+      background: #cba052;
       line-height: 1.55;
     }
     h1, h2, h3 {
       font-family: Georgia, "Times New Roman", serif;
-      color: #231911;
+      color: #1f1307;
     }
-    h1 { margin-bottom: 0.25rem; font-size: 1.75rem; letter-spacing: 0.01em; }
-    .subtitle { color: #5c4b37; margin-top: 0; margin-bottom: 1.25rem; font-size: 0.95rem; }
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      border-bottom: 2px solid #8c6829;
+      padding-bottom: 0.75rem;
+      margin-bottom: 1.25rem;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.75rem; letter-spacing: 0.01em; }
+    .nav-tabs { display: flex; gap: 0.5rem; }
+    .nav-tab {
+      background: #e6c887;
+      color: #3b2510;
+      border: 1px solid #8c6829;
+      padding: 0.45rem 0.9rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .nav-tab:hover:not(.active) { background: #efd7a1; }
+    .nav-tab.active {
+      background: #3b2510;
+      color: #fdf7e7;
+      border-color: #3b2510;
+    }
+    .subtitle { color: #3b2510; margin-top: 0; margin-bottom: 1.15rem; font-size: 0.95rem; font-weight: 500; }
     .source-toggle {
       display: flex;
       gap: 0.5rem;
@@ -27,109 +54,109 @@
     }
     .toggle-btn {
       flex: 1;
-      background: #ede3ce;
-      color: #5c4b37;
-      border: 1px solid #c7b699;
+      background: #e6c887;
+      color: #3b2510;
+      border: 1px solid #8c6829;
       padding: 0.5rem 0.75rem;
       font-size: 0.9rem;
       font-weight: 600;
       border-radius: 5px;
       cursor: pointer;
     }
-    .toggle-btn:hover:not(.active) { background: #e3d6bc; }
+    .toggle-btn:hover:not(.active) { background: #efd7a1; }
     .toggle-btn.active {
-      background: #3d2c1e;
-      color: #f7f1e3;
-      border-color: #3d2c1e;
+      background: #3b2510;
+      color: #fdf7e7;
+      border-color: #3b2510;
     }
     .controls {
       display: flex;
       gap: 0.75rem;
-      background: #f3ead8;
+      background: #f7ecd2;
       padding: 1rem;
-      border: 1px solid #c7b699;
+      border: 1px solid #8c6829;
       border-radius: 6px;
       align-items: center;
-      box-shadow: 0 1px 3px rgba(44, 34, 24, 0.08);
+      box-shadow: 0 2px 6px rgba(36, 23, 10, 0.18);
     }
     select {
       flex: 1;
       padding: 0.55rem;
       font-size: 0.95rem;
-      color: #2c2218;
-      background: #faf5ea;
-      border: 1px solid #b8a484;
+      color: #24170a;
+      background: #fdf7e7;
+      border: 1px solid #a67f38;
       border-radius: 4px;
     }
     button {
       padding: 0.55rem 1rem;
       font-size: 0.9rem;
       font-weight: 600;
-      border: 1px solid #3d2c1e;
+      border: 1px solid #3b2510;
       border-radius: 4px;
-      background: #3d2c1e;
-      color: #f7f1e3;
+      background: #3b2510;
+      color: #fdf7e7;
       cursor: pointer;
     }
-    button:hover:not(:disabled) { background: #523b28; }
+    button:hover:not(:disabled) { background: #543618; }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
     button.secondary {
-      background: #faf5ea;
-      color: #3d2c1e;
-      border-color: #9e8a6b;
+      background: #fdf7e7;
+      color: #3b2510;
+      border-color: #8c6829;
     }
-    button.secondary:hover:not(:disabled) { background: #ede3ce; }
+    button.secondary:hover:not(:disabled) { background: #f0dfb8; }
     .card {
-      margin-top: 1.5rem;
-      background: #f3ead8;
-      border: 1px solid #c7b699;
+      margin-top: 1.35rem;
+      background: #f7ecd2;
+      border: 1px solid #8c6829;
       border-radius: 6px;
       padding: 1.35rem;
-      display: none;
-      box-shadow: 0 2px 6px rgba(44, 34, 24, 0.08);
+      box-shadow: 0 2px 8px rgba(36, 23, 10, 0.18);
     }
     .header-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      border-bottom: 1px solid #d4c5ab;
+      border-bottom: 1px solid #c9a661;
       padding-bottom: 0.75rem;
       margin-bottom: 1rem;
     }
     .score-badge {
       font-family: Georgia, serif;
-      font-size: 1.2rem;
+      font-size: 1.15rem;
       font-weight: 700;
       padding: 0.3rem 0.75rem;
       border-radius: 4px;
-      background: #e2d5bc;
-      color: #3d2c1e;
-      border: 1px solid #c7b699;
+      background: #e6c887;
+      color: #2e1c0c;
+      border: 1px solid #8c6829;
+      white-space: nowrap;
     }
-    .score-high { background: #e8c5be; color: #6e1d14; border-color: #c9978d; }
-    .score-med { background: #ead9b0; color: #6b470c; border-color: #cbb47c; }
-    .score-low { background: #dfd7c5; color: #4a3f32; border-color: #bfb49e; }
-    .meta { color: #63513d; font-size: 0.9rem; }
+    .score-high { background: #e6b3a3; color: #6e160c; border-color: #b56c57; }
+    .score-med { background: #f2cf7e; color: #5e3904; border-color: #b88c32; }
+    .score-low { background: #e8d4a2; color: #47331a; border-color: #a6884b; }
+    .meta { color: #5c4022; font-size: 0.9rem; }
     .actions {
       display: flex;
       gap: 0.75rem;
       margin-top: 1.25rem;
       padding-top: 1rem;
-      border-top: 1px solid #d4c5ab;
+      border-top: 1px solid #c9a661;
     }
     .flagged-item {
-      border-left: 3px solid #6b4c35;
-      background: #faf5ea;
-      padding: 0.6rem 0.85rem;
+      border-left: 3px solid #754c19;
+      background: #fdf7e7;
+      padding: 0.65rem 0.9rem;
       margin-bottom: 0.75rem;
       border-radius: 0 4px 4px 0;
       font-size: 0.92rem;
     }
     .kw {
       display: inline-block;
-      background: #e6dcc8;
-      border: 1px solid #bfb093;
-      color: #3d2c1e;
+      background: #ebd094;
+      border: 1px solid #b58f43;
+      color: #2e1c0c;
       border-radius: 3px;
       padding: 0.05rem 0.4rem;
       font-size: 0.78rem;
@@ -141,62 +168,107 @@
       cursor: pointer;
       font-size: 0.85rem;
       font-weight: 600;
-      color: #5c4b37;
+      color: #543618;
     }
     details.transcription pre {
       white-space: pre-wrap;
       font-family: Georgia, "Times New Roman", serif;
       font-size: 0.88rem;
-      background: #f3ead8;
-      border: 1px solid #d4c5ab;
+      background: #f7ecd2;
+      border: 1px solid #c9a661;
       padding: 0.75rem;
       border-radius: 4px;
       margin-top: 0.4rem;
       line-height: 1.5;
     }
-    #status { margin-top: 0.75rem; font-size: 0.9rem; color: #5c4b37; }
+    .library-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #fdf7e7;
+      border: 1px solid #c9a661;
+      border-radius: 5px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.6rem;
+      cursor: pointer;
+    }
+    .library-row:hover { background: #f0dfb8; }
+    .filter-pills { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    #status { margin-top: 0.75rem; font-size: 0.9rem; color: #2e1c0c; font-weight: 500; }
   </style>
 </head>
 <body>
-  <h1>Royal Navy Logbook Explorer</h1>
-  <p class="subtitle">Select a vessel to inspect or scan its logbooks (1756–1815).</p>
-
-  <div class="source-toggle">
-    <button id="btnStructured" class="toggle-btn active">CLIWOC Archive (Structured)</button>
-    <button id="btnRawScan" class="toggle-btn">Handwritten Scans (Vision-LLM)</button>
+  <div class="top-bar">
+    <h1>Royal Navy Logbook Explorer</h1>
+    <div class="nav-tabs">
+      <button id="tabExplorer" class="nav-tab active">Explorer</button>
+      <button id="tabLibrary" class="nav-tab">Saved &amp; Scanned</button>
+    </div>
   </div>
 
-  <div class="controls">
-    <select id="shipSelect">
-      <option value="">-- Select a Ship --</option>
-    </select>
-    <button id="scanBtn" disabled>Scan Logbooks</button>
-  </div>
-  <div id="status"></div>
+  <!-- EXPLORER VIEW -->
+  <div id="explorerView">
+    <p class="subtitle">Select a vessel to inspect or scan its logbooks (1756–1815).</p>
 
-  <div id="dossier" class="card">
-    <div class="header-row">
-      <div>
-        <h2 id="shipTitle" style="margin:0;"></h2>
-        <div id="shipMeta" class="meta"></div>
-      </div>
-      <div id="scoreBadge" class="score-badge">Not Scanned</div>
+    <div class="source-toggle">
+      <button id="btnStructured" class="toggle-btn active">CLIWOC Archive (Structured)</button>
+      <button id="btnRawScan" class="toggle-btn">Handwritten Scans (Vision-LLM)</button>
     </div>
 
-    <h3>Voyage Summary</h3>
-    <p id="shipSummary" style="white-space: pre-line;"></p>
+    <div class="controls">
+      <select id="shipSelect">
+        <option value="">-- Select a Ship --</option>
+      </select>
+      <button id="scanBtn" disabled>Scan Logbooks</button>
+    </div>
+    <div id="status"></div>
 
-    <h3>Scanned Pages</h3>
-    <div id="flaggedList"></div>
+    <div id="dossier" class="card" style="display: none;">
+      <div class="header-row">
+        <div>
+          <h2 id="shipTitle" style="margin:0;"></h2>
+          <div id="shipMeta" class="meta"></div>
+        </div>
+        <div id="scoreBadge" class="score-badge">Not Scanned</div>
+      </div>
 
-    <div class="actions">
-      <button id="saveBtn" class="secondary" style="display: none;">Save Voyage</button>
-      <button id="deepDiveBtn">Deep Dive (Full Transcription)</button>
-      <button id="mapBtn" class="secondary" disabled title="Coming in Phase 4">Visualize Route</button>
+      <h3>Voyage Summary</h3>
+      <p id="shipSummary" style="white-space: pre-line;"></p>
+
+      <h3>Scanned Pages</h3>
+      <div id="flaggedList"></div>
+
+      <div class="actions">
+        <button id="saveBtn" class="secondary" style="display: none;">Save Voyage</button>
+        <button id="deepDiveBtn">Deep Dive (Full Transcription)</button>
+        <button id="mapBtn" class="secondary" disabled title="Coming in Phase 4">Visualize Route</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SAVED & SCANNED LIBRARY VIEW -->
+  <div id="libraryView" style="display: none;">
+    <div class="card" style="margin-top: 0;">
+      <div class="header-row">
+        <h2 style="margin:0;">Saved &amp; Scanned Logbooks</h2>
+        <div class="filter-pills">
+          <button id="filterSaved" class="nav-tab active">Saved ★</button>
+          <button id="filterAllScanned" class="nav-tab">All Scanned</button>
+        </div>
+      </div>
+      <div id="libraryList"></div>
     </div>
   </div>
 
   <script>
+    const explorerView = document.getElementById("explorerView");
+    const libraryView = document.getElementById("libraryView");
+    const tabExplorer = document.getElementById("tabExplorer");
+    const tabLibrary = document.getElementById("tabLibrary");
+    const filterSaved = document.getElementById("filterSaved");
+    const filterAllScanned = document.getElementById("filterAllScanned");
+    const libraryList = document.getElementById("libraryList");
+
     const shipSelect = document.getElementById("shipSelect");
     const scanBtn = document.getElementById("scanBtn");
     const statusEl = document.getElementById("status");
@@ -208,12 +280,65 @@
 
     let currentShipId = null;
     let currentSource = "structured";
+    let libraryMode = "saved";
+    let libraryCache = [];
 
     function escapeHtml(str) {
       return String(str || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
+    }
+
+    function showView(view) {
+      const isExplorer = view === "explorer";
+      explorerView.style.display = isExplorer ? "block" : "none";
+      libraryView.style.display = isExplorer ? "none" : "block";
+      tabExplorer.classList.toggle("active", isExplorer);
+      tabLibrary.classList.toggle("active", !isExplorer);
+      if (!isExplorer) loadLibrary();
+    }
+
+    async function loadLibrary() {
+      const res = await fetch("/api/library");
+      libraryCache = await res.json();
+      renderLibrary();
+    }
+
+    function renderLibrary() {
+      const items = libraryMode === "saved"
+        ? libraryCache.filter(s => s.is_saved)
+        : libraryCache;
+
+      if (!items.length) {
+        libraryList.innerHTML = `<p class="meta">No ${libraryMode === "saved" ? "saved" : "scanned"} logbooks yet.</p>`;
+        return;
+      }
+
+      libraryList.innerHTML = items.map(s => `
+        <div class="library-row" onclick="openFromLibrary(${s.id}, '${s.source_type}')">
+          <div>
+            <strong>${escapeHtml(s.ship_name)}</strong> ${s.is_saved ? "★" : ""}<br/>
+            <span class="meta">${escapeHtml(s.ship_class || "Unknown")} • ${s.year_start}–${s.year_end} • ${s.source_type}</span>
+          </div>
+          <div class="score-badge">${s.interest_score !== null ? s.interest_score + " / 10" : "Not Scanned"}</div>
+        </div>
+      `).join("");
+    }
+
+    async function openFromLibrary(shipId, sourceType) {
+      showView("explorer");
+      if (currentSource !== sourceType) {
+        currentSource = sourceType;
+        btnStructured.classList.toggle("active", sourceType === "structured");
+        btnRawScan.classList.toggle("active", sourceType === "raw_scan");
+        await loadShips();
+      }
+      shipSelect.value = shipId;
+      currentShipId = String(shipId);
+      scanBtn.disabled = false;
+      const res = await fetch(`/api/ships/${shipId}`);
+      renderDossier(await res.json());
     }
 
     async function loadShips() {
@@ -290,6 +415,21 @@
       }
     }
 
+    tabExplorer.addEventListener("click", () => showView("explorer"));
+    tabLibrary.addEventListener("click", () => showView("library"));
+    filterSaved.addEventListener("click", () => {
+      libraryMode = "saved";
+      filterSaved.classList.add("active");
+      filterAllScanned.classList.remove("active");
+      renderLibrary();
+    });
+    filterAllScanned.addEventListener("click", () => {
+      libraryMode = "all";
+      filterAllScanned.classList.add("active");
+      filterSaved.classList.remove("active");
+      renderLibrary();
+    });
+
     btnStructured.addEventListener("click", () => setSource("structured"));
     btnRawScan.addEventListener("click", () => setSource("raw_scan"));
 
@@ -308,16 +448,20 @@
     scanBtn.addEventListener("click", async () => {
       if (!currentShipId) return;
       scanBtn.disabled = true;
-      statusEl.textContent = "Scanning logbooks... this may take a moment.";
-      const res = await fetch(`/api/ships/${currentShipId}/triage`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        statusEl.textContent = `Error: ${data.error}`;
-      } else {
-        statusEl.textContent = "Scan complete.";
-        renderDossier(data);
-        await loadShips();
-        shipSelect.value = currentShipId;
+      statusEl.textContent = "Scanning logbooks... watch PowerShell for live page progress.";
+      try {
+        const res = await fetch(`/api/ships/${currentShipId}/triage`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = `Error: ${data.error}`;
+        } else {
+          statusEl.textContent = "Scan complete.";
+          renderDossier(data);
+          await loadShips();
+          shipSelect.value = currentShipId;
+        }
+      } catch (err) {
+        statusEl.textContent = `Request failed: ${err.message}. Check PowerShell for details.`;
       }
       scanBtn.disabled = false;
     });

@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
@@ -12,6 +14,7 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 class PageTriage(BaseModel):
+    detected_ship_name: str
     date_range: str
     lat_lon: str
     remarks_summary: str
@@ -34,13 +37,14 @@ KEYWORD_WEIGHTS = {
 
 PROMPT = """
 You are a naval historian transcribing an 18th/19th-century Royal Navy ship logbook page.
-Read the handwritten 'Remarks' and navigation columns carefully.
+Read the header, title page (if present), handwritten 'Remarks', and navigation columns carefully.
 Extract:
-1. date_range: The dates covered on this page (e.g., "1798-04-12 to 1798-04-15" or "Unknown").
-2. lat_lon: Any latitude/longitude recorded, or "None".
-3. remarks_summary: A 1-2 sentence summary of notable events (discipline, weather, sightings, combat).
-4. full_transcription: A complete, faithful transcription of all readable handwritten text on the page, preserving line breaks and dates where possible. Use [illegible] for words that cannot be read.
-5. flagged_keywords: Any exact or closely matching terms from this list that appear on the page:
+1. detected_ship_name: The name of the Royal Navy ship if written on the cover, header, or page (e.g., "HMS Victory" or "HMS Indefatigable"), or "Unknown" if not visible.
+2. date_range: The dates covered on this page (e.g., "1798-04-12 to 1798-04-15" or "Unknown").
+3. lat_lon: Any latitude/longitude recorded, or "None".
+4. remarks_summary: A 1-2 sentence summary of notable events (discipline, weather, sightings, combat).
+5. full_transcription: A complete, faithful transcription of all readable handwritten text on the page, preserving line breaks and dates where possible. Use [illegible] for words that cannot be read.
+6. flagged_keywords: Any exact or closely matching terms from this list that appear on the page:
    mutiny, mutinous, sunk, wrecked, captured, struck colours, engagement, broadside, prize,
    flogged, punished, lashes, deserted, court martial, hanged, buried, killed, wounded, chased,
    gale, hurricane, sighted, strange sail, leaking, short of water, sick.
@@ -63,24 +67,9 @@ def calculate_voyage_score(page_scores: list[float], all_keywords: set[str]) -> 
 
     return round(density_score, 1)
 
-def triage_ship_folder(ship_id: int, folder_path: str):
-    image_files = sorted(
-        p for p in Path(folder_path).iterdir()
-        if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
-    )
-    if not image_files:
-        print(f"No images found in {folder_path}")
-        return
-
-    page_scores = []
-    all_keywords = set()
-    flagged_summaries = []
-
-    with get_connection() as conn:
-        for idx, img_path in enumerate(image_files, start=1):
-            print(f"Scanning page {idx}/{len(image_files)}: {img_path.name}...")
-            img = Image.open(img_path)
-
+def scan_page_with_retry(img: Image.Image, max_attempts: int = 3) -> PageTriage:
+    for attempt in range(1, max_attempts + 1):
+        try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
                 contents=[PROMPT, img],
@@ -90,8 +79,46 @@ def triage_ship_folder(ship_id: int, folder_path: str):
                     temperature=0.1,
                 ),
             )
+            return PageTriage.model_validate_json(response.text)
+        except Exception as e:
+            if attempt == max_attempts:
+                raise
+            wait = 3 * (2 ** (attempt - 1))  # 3s, 6s
+            print(f"  Temporary API error ({e}). Retrying in {wait}s...", flush=True)
+            time.sleep(wait)
 
-            data = PageTriage.model_validate_json(response.text)
+def triage_ship_folder(ship_id: int, folder_path: str):
+    image_files = sorted(
+        p for p in Path(folder_path).iterdir()
+        if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+    )
+    if not image_files:
+        print(f"No images found in {folder_path}", flush=True)
+        return
+
+    page_scores = []
+    all_keywords = set()
+    flagged_summaries = []
+    detected_names = []
+    detected_years = []
+
+    with get_connection() as conn:
+        for idx, img_path in enumerate(image_files, start=1):
+            print(f"Scanning page {idx}/{len(image_files)}: {img_path.name}...", flush=True)
+            try:
+                img = Image.open(img_path)
+                img.thumbnail((1600, 1600))
+                data = scan_page_with_retry(img)
+            except Exception as e:
+                print(f"  Skipping page {idx} ({img_path.name}) after retries: {e}", flush=True)
+                continue
+
+            if data.detected_ship_name and data.detected_ship_name.strip().lower() not in {"unknown", "none", "n/a"}:
+                detected_names.append(data.detected_ship_name.strip())
+
+            years_in_page = [int(y) for y in re.findall(r"\b(17\d{2}|18\d{2})\b", data.date_range)]
+            detected_years.extend(years_in_page)
+
             p_score = score_page(data.flagged_keywords)
             page_scores.append(p_score)
             all_keywords.update(k.lower() for k in data.flagged_keywords)
@@ -109,16 +136,33 @@ def triage_ship_folder(ship_id: int, folder_path: str):
                 json.dumps(data.flagged_keywords), p_score
             ))
 
+            time.sleep(1.0)
+
         final_score = calculate_voyage_score(page_scores, all_keywords)
         summary_text = "\n".join(flagged_summaries[:10]) if flagged_summaries else "Routine voyage; no major incidents flagged."
 
+        ship_row = conn.execute("SELECT ship_name, year_start, year_end FROM ships WHERE id = ?", (ship_id,)).fetchone()
+        new_name = ship_row["ship_name"]
+        new_start = ship_row["year_start"]
+        new_end = ship_row["year_end"]
+
+        if detected_names and ship_row["ship_name"].lower().startswith(("adm", "p")):
+            best_name = max(set(detected_names), key=detected_names.count)
+            new_name = f"{best_name} ({ship_row['ship_name']})"
+            print(f"Auto-identified vessel: {new_name}", flush=True)
+
+        if detected_years:
+            new_start = min(detected_years)
+            new_end = max(detected_years)
+
         conn.execute("""
             UPDATE ships
-            SET interest_score = ?, triage_summary = ?, triaged_at = CURRENT_TIMESTAMP
+            SET ship_name = ?, year_start = ?, year_end = ?,
+                interest_score = ?, triage_summary = ?, triaged_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (final_score, summary_text, ship_id))
+        """, (new_name, new_start, new_end, final_score, summary_text, ship_id))
 
-    print(f"\nScan complete! Final Interest Score: {final_score}/10")
+    print(f"\nScan complete! Final Interest Score: {final_score}/10", flush=True)
 
 if __name__ == "__main__":
     print("Ready. Import triage_ship_folder() or run via src/app.py.")

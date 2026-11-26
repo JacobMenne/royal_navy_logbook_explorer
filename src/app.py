@@ -6,6 +6,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 from db import get_connection, init_db
 from ingest_cliwoc import scan_cliwoc_ship
+from ingest_corral import download_corral_logbook
 from triage import triage_ship_folder
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +34,20 @@ def list_ships():
 
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route("/api/library", methods=["GET"])
+def get_library():
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT s.*,
+                   CASE WHEN sv.ship_id IS NOT NULL THEN 1 ELSE 0 END AS is_saved,
+                   sv.saved_at
+            FROM ships s
+            LEFT JOIN saved_voyages sv ON s.id = sv.ship_id
+            WHERE sv.ship_id IS NOT NULL OR s.interest_score IS NOT NULL
+            ORDER BY is_saved DESC, s.interest_score DESC, s.ship_name ASC
+        """).fetchall()
     return jsonify([dict(r) for r in rows])
 
 @app.route("/api/ships/<int:ship_id>", methods=["GET"])
@@ -70,16 +85,26 @@ def run_triage(ship_id):
         if not ship:
             return jsonify({"error": "Ship not found"}), 404
 
-        source = Path(ship["source_path"])
-        if not source.exists():
-            return jsonify({"error": f"Source not found: {source}."}), 400
-
+        source_path = ship["source_path"]
         conn.execute("DELETE FROM triage_pages WHERE ship_id = ?", (ship_id,))
 
-    if ship["source_type"] == "raw_scan":
-        triage_ship_folder(ship_id, str(source))
-    else:
-        scan_cliwoc_ship(ship_id, ship["ship_name"], str(source))
+    try:
+        if ship["source_type"] == "raw_scan":
+            if source_path.startswith(("http://", "https://")):
+                local_folder = download_corral_logbook(source_path, ship["ship_name"])
+                triage_ship_folder(ship_id, str(local_folder))
+            else:
+                source = Path(source_path)
+                if not source.exists():
+                    return jsonify({"error": f"Folder not found: {source}."}), 400
+                triage_ship_folder(ship_id, str(source))
+        else:
+            source = Path(source_path)
+            if not source.exists():
+                return jsonify({"error": f"Source not found: {source}."}), 400
+            scan_cliwoc_ship(ship_id, ship["ship_name"], str(source))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     return get_ship_detail(ship_id)
 
