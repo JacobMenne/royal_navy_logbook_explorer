@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -13,6 +14,11 @@ from db import get_connection
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Free Tier pacing: 15 RPM max -> 4.2s between request starts (~14.2 RPM)
+_rate_lock = threading.Lock()
+_last_request_time = 0.0
+MIN_REQUEST_INTERVAL = 4.2
 
 class PageTriage(BaseModel):
     detected_ship_name: str
@@ -62,6 +68,15 @@ Extract:
    gale, hurricane, sighted, strange sail, leaking, short of water, sick.
 """
 
+def _wait_for_rate_limit():
+    global _last_request_time
+    with _rate_lock:
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < MIN_REQUEST_INTERVAL:
+            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        _last_request_time = time.monotonic()
+
 def score_page(keywords: list[str]) -> float:
     raw_score = sum(KEYWORD_WEIGHTS.get(k.lower(), 0.0) for k in keywords)
     return round(min(10.0, raw_score), 1)
@@ -79,8 +94,9 @@ def calculate_voyage_score(page_scores: list[float], all_keywords: set[str]) -> 
 
     return round(density_score, 1)
 
-def scan_page_with_retry(img: Image.Image, max_attempts: int = 3) -> PageTriage:
+def scan_page_with_retry(img: Image.Image, max_attempts: int = 4) -> PageTriage:
     for attempt in range(1, max_attempts + 1):
+        _wait_for_rate_limit()
         try:
             response = client.models.generate_content(
                 model="gemini-3.5-flash-lite",
@@ -95,8 +111,14 @@ def scan_page_with_retry(img: Image.Image, max_attempts: int = 3) -> PageTriage:
         except Exception as e:
             if attempt == max_attempts:
                 raise
-            wait = 3 * (2 ** (attempt - 1))  # 3s, 6s
-            print(f"  Temporary API error ({e}). Retrying in {wait}s...", flush=True)
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                match = re.search(r"retry in (\d+(?:\.\d+)?)s", err_str, re.IGNORECASE)
+                wait = int(float(match.group(1))) + 3 if match else 15 * attempt
+                print(f"  Rate limit (429). Waiting {wait}s before retry {attempt}/{max_attempts - 1}...", flush=True)
+            else:
+                wait = 4 * (2 ** (attempt - 1))  # 4s, 8s, 16s
+                print(f"  Temporary API error ({err_str[:120]}). Retrying in {wait}s...", flush=True)
             time.sleep(wait)
 
 def _scan_worker(idx: int, total_images: int, img_path: Path) -> tuple[int, PageTriage]:
@@ -106,10 +128,10 @@ def _scan_worker(idx: int, total_images: int, img_path: Path) -> tuple[int, Page
     data = scan_page_with_retry(img)
     return idx, data
 
-def triage_ship_folder(ship_id: int, folder_path: str, batch_size: int = 25, max_workers: int = 4) -> dict:
+def triage_ship_folder(ship_id: int, folder_path: str, batch_size: int = 25, max_workers: int = 2) -> dict:
     """
-    Parallel resumable scanner: skips already-scanned page_nums, scans up to
-    `batch_size` new pages concurrently, and commits each page immediately.
+    Rate-limited resumable scanner: skips already-scanned page_nums, scans up to
+    `batch_size` new pages, and commits each page immediately to SQLite.
     """
     image_files = sorted(
         p for p in Path(folder_path).iterdir()
@@ -180,7 +202,7 @@ def triage_ship_folder(ship_id: int, folder_path: str, batch_size: int = 25, max
 
         page_scores = [p["page_score"] or 0.0 for p in all_pages]
         all_keywords = set()
-        flagged_summaries = []
+        flagged_events = []
         detected_years = []
 
         for p in all_pages:
@@ -189,12 +211,19 @@ def triage_ship_folder(ship_id: int, folder_path: str, batch_size: int = 25, max
             years = [int(y) for y in re.findall(r"\b(17\d{2}|18\d{2})\b", p["date_range"] or "")]
             detected_years.extend(years)
             if (p["page_score"] or 0) > 0:
-                flagged_summaries.append(f"Page {p['page_num']} ({p['date_range']}): {p['remarks_summary']}")
+                flagged_events.append((p["page_score"], p["page_num"], p["date_range"], p["remarks_summary"]))
+
+        # Keep the Top 8 highest-impact events, then display them in chronological order
+        top_events = sorted(flagged_events, key=lambda x: (-x[0], x[1]))[:8]
+        top_events.sort(key=lambda x: x[1])
+        flagged_summaries = [
+            f"• Page {num} ({dr}): {rem}" for _, num, dr, rem in top_events
+        ]
 
         final_score = calculate_voyage_score(page_scores, all_keywords)
-        header_line = f"Scanned {len(all_pages)} of {total_images} pages."
+        header_line = f"Scanned {len(all_pages)} of {total_images} pages • {len(flagged_events)} flagged"
         if flagged_summaries:
-            summary_text = header_line + "\n\n" + "\n".join(flagged_summaries[:12])
+            summary_text = header_line + "\n\nTop Highlights:\n" + "\n".join(flagged_summaries)
         else:
             summary_text = header_line + "\n\nRoutine voyage so far; no major incidents flagged."
 
@@ -275,6 +304,7 @@ Stay faithful to the logbook text—do not invent events not supported by the en
 """
 
     print(f"Generating Deep Dive narrative for {ship['ship_name']}...", flush=True)
+    _wait_for_rate_limit()
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=deep_dive_prompt,
@@ -330,6 +360,7 @@ Logbook entries:
 """
 
     print(f"Extracting route waypoints for {ship['ship_name']}...", flush=True)
+    _wait_for_rate_limit()
     response = client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=prompt,

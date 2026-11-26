@@ -147,6 +147,46 @@
       border-top: 1px solid #c9a661;
       flex-wrap: wrap;
     }
+    details.page-batch {
+      background: #efe0bc;
+      border: 1px solid #b58f43;
+      border-radius: 6px;
+      margin-bottom: 0.65rem;
+      overflow: hidden;
+    }
+    details.page-batch > summary {
+      cursor: pointer;
+      padding: 0.7rem 1rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 700;
+      color: #24170a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      list-style: none;
+    }
+    details.page-batch > summary::-webkit-details-marker { display: none; }
+    details.page-batch > summary::before {
+      content: "▸ ";
+      color: #754c19;
+      margin-right: 0.35rem;
+    }
+    details.page-batch[open] > summary::before {
+      content: "▾ ";
+    }
+    details.page-batch > summary:hover { background: #e8d3a1; }
+    .batch-meta {
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: #5c4022;
+    }
+    .batch-body {
+      padding: 0.75rem 0.9rem 0.25rem;
+      background: #f7ecd2;
+      border-top: 1px solid #c9a661;
+    }
     .flagged-item {
       border-left: 3px solid #754c19;
       background: #fdf7e7;
@@ -154,6 +194,19 @@
       margin-bottom: 0.75rem;
       border-radius: 0 4px 4px 0;
       font-size: 0.92rem;
+    }
+    .summary-box {
+      background: #fdf7e7;
+      border: 1px solid #c9a661;
+      border-left: 4px solid #754c19;
+      border-radius: 0 6px 6px 0;
+      padding: 0.85rem 1rem;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-line;
+      font-size: 0.93rem;
+      line-height: 1.55;
+      margin: 0.5rem 0 1.25rem;
     }
     .narrative-box {
       background: #fdf7e7;
@@ -298,7 +351,7 @@
       </div>
 
       <h3>Voyage Summary</h3>
-      <p id="shipSummary" style="white-space: pre-line;"></p>
+      <div id="shipSummary" class="summary-box"></div>
 
       <h3>Scanned Pages</h3>
       <div id="flaggedList"></div>
@@ -401,6 +454,56 @@
       }
       if (inList) html += "</ul>";
       return html;
+    }
+
+    function renderPageBatches(pages) {
+      const BATCH_SIZE = 25;
+      const chunks = [];
+      for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+        chunks.push(pages.slice(i, i + BATCH_SIZE));
+      }
+
+      return chunks.map(chunk => {
+        const firstNum = chunk[0].page_num;
+        const lastNum = chunk[chunk.length - 1].page_num;
+        const label = firstNum === lastNum ? `Page ${firstNum}` : `Pages ${firstNum}–${lastNum}`;
+
+        const knownDates = chunk
+          .map(p => (p.date_range || "").trim())
+          .filter(d => d && d.toLowerCase() !== "unknown");
+        const dateSpan = knownDates.length >= 2
+          ? `${knownDates[0]} → ${knownDates[knownDates.length - 1]}`
+          : (knownDates[0] || "");
+
+        const flaggedCount = chunk.filter(p => (p.page_score || 0) > 0).length;
+        const metaParts = [
+          `${chunk.length} ${chunk.length === 1 ? "page" : "pages"}`,
+          flaggedCount ? `${flaggedCount} flagged` : "routine",
+        ];
+        if (dateSpan) metaParts.unshift(dateSpan);
+
+        const itemsHtml = chunk.map(p => `
+          <div class="flagged-item">
+            <strong>Page ${p.page_num}</strong> (${escapeHtml(p.date_range)}) — Score: ${p.page_score} / 10<br/>
+            ${escapeHtml(p.remarks_summary)}<br/>
+            ${p.flagged_keywords.map(k => `<span class="kw">${escapeHtml(k)}</span>`).join("")}
+            <details class="transcription">
+              <summary>Read Full Transcription</summary>
+              <pre>${escapeHtml(p.full_transcription || "No transcription recorded.")}</pre>
+            </details>
+          </div>
+        `).join("");
+
+        return `
+          <details class="page-batch">
+            <summary>
+              <span>${label}</span>
+              <span class="batch-meta">${escapeHtml(metaParts.join(" • "))}</span>
+            </summary>
+            <div class="batch-body">${itemsHtml}</div>
+          </details>
+        `;
+      }).join("");
     }
 
     function showView(view) {
@@ -525,17 +628,7 @@
       if (!flagged_pages.length) {
         flaggedList.innerHTML = "<p class='meta'>No pages scanned yet.</p>";
       } else {
-        flaggedList.innerHTML = flagged_pages.map(p => `
-          <div class="flagged-item">
-            <strong>Page ${p.page_num}</strong> (${escapeHtml(p.date_range)}) — Score: ${p.page_score} / 10<br/>
-            ${escapeHtml(p.remarks_summary)}<br/>
-            ${p.flagged_keywords.map(k => `<span class="kw">${escapeHtml(k)}</span>`).join("")}
-            <details class="transcription">
-              <summary>Read Full Transcription</summary>
-              <pre>${escapeHtml(p.full_transcription || "No transcription recorded.")}</pre>
-            </details>
-          </div>
-        `).join("");
+        flaggedList.innerHTML = renderPageBatches(flagged_pages);
       }
 
       if (isScanned && ship.source_type === "raw_scan") {
